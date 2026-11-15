@@ -112,3 +112,16 @@ test("summaries across runs: means, ranges, gaps, and paired differences", () =>
   assert.deepEqual([before.lo, before.hi], [0, 0], "before the reform each run equals its no-reform twin");
   assert.equal(before.sameSign, false);
 });
+
+test("without Web Workers the run pool falls back to the main thread, and cancelling still works", async () => {
+  // Node has no browser Worker, which is exactly the situation the fallback is for.
+  (globalThis as unknown as { window: unknown }).window = globalThis;
+  const { RunPool } = await import("../src/web/runs.ts");
+  const pool = new RunPool(2);
+  const cfg = reformConfig(BASELINE_POLICY, { seed: 3, populationSize: 800, years: 3, reformYear: 1 });
+  const kept = pool.run(cfg, "kept");
+  const dropped = pool.run(cfg, "dropped");
+  pool.cancel("dropped");
+  assert.equal(await dropped, null, "a cancelled run resolves with nothing");
+  assert.deepEqual((await kept)!.years, runSimulation(cfg).years, "the fallback produces the same result as a direct run");
+});

@@ -2,7 +2,7 @@
 
 **Purpose:** A web-based simulator for *Introduction to Health Policy in the United States* that lets students design policy packages and watch cost, quality, and access outcomes unfold over a 10–20 year horizon. The central pedagogical goal is that Iron Triangle trade-offs **emerge from economic mechanisms** — they are never hard-coded.
 
-**Status:** Design v0.9 (November 2026) — the engine (households, insurers, providers, employers, government incl. VA/NHS direct provision), the no-build web frontend, and all three classroom modes are built, validated by 89 tests that run every scenario on several seeds. November 2026 revisions: the **reform timeline** (§2a), the **care gap**, **supply that follows demand**, **profit-driven mergers**, **wage pass-through** (§3.2, §3.3), **independent random draws per household**, a **calibration-target table** (§8), **multi-run ranges** on the dashboard, **per-chart explanations**, **challenges** and the **comparison view** (§5, §6). Remaining work is in §9; anything specified but not built is marked *(not built)*.
+**Status:** Design v0.9 (November 2026) — the engine (households, insurers, providers, employers, government incl. VA/NHS direct provision), the no-build web frontend, and all three classroom modes are built, validated by 90 tests that run every scenario on several seeds. November 2026 revisions: the **reform timeline** (§2a), the **care gap**, **supply that follows demand**, **profit-driven mergers**, **wage pass-through** (§3.2, §3.3), **independent random draws per household**, a **calibration-target table** (§8), **multi-run ranges** on the dashboard, **per-chart explanations**, **challenges** and the **comparison view** (§5, §6). Remaining work is in §9; anything specified but not built is marked *(not built)*.
 
 ---
 
@@ -165,7 +165,7 @@ All three are built. Everything travels in the URL: a package link carries the l
 - **State sharing:** policy package, reform year, phase-in, seed and any challenge serialized (diff-from-default → UTF-8 → base64) into the URL hash; a comparison is `#cmp.` plus a list of names and package links. Decoding validates the type of every field and falls back to the default for anything malformed. No backend ever.
 - **Run it:** `npm run build` then `npm run serve` (a ~30-line zero-dep Node static server at `scripts/serve.ts`) → http://localhost:5173/. Or `npm run dev` (build + serve).
 - **Hosting:** static site — `web/` is the deployable root (GitHub Pages / Netlify / a USB stick / the LMS).
-- **Testing:** 89 automated tests. Every scenario in §8 runs on three seeds (five for the merger and wage tests, eight for calibration), so no threshold is fitted to one draw; the calibration targets are enforced as bands on multi-seed means; the dashboard's plain logic (links, challenges, the comparison list, summaries across runs) is unit-tested; rendering is checked in a browser.
+- **Testing:** 90 automated tests. Every scenario in §8 runs on three seeds (five for the merger and wage tests, eight for calibration), so no threshold is fitted to one draw; the calibration targets are enforced as bands on multi-seed means; the dashboard's plain logic (links, challenges, the comparison list, summaries across runs) is unit-tested; rendering is checked in a browser.
 - **Version control:** the folder is a git repository (`web/dist/` and logs ignored).
 
 ---

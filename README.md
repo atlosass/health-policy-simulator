@@ -21,7 +21,7 @@ Other commands:
 | `npm run dev` | Build, then serve at http://localhost:5173/ |
 | `npm run build` | Compile `src/` to browser modules in `web/dist/` |
 | `npm run serve` | Serve `web/` without rebuilding |
-| `npm test` | Run the 89 regression tests (about 25 seconds) |
+| `npm test` | Run the 90 regression tests (about 25 seconds) |
 | `npm run typecheck` | Type-check without building |
 
 To put the simulator online, run `npm run build` and upload the `web/` folder to any static host (GitHub Pages, Netlify, the LMS). There is no server component.
