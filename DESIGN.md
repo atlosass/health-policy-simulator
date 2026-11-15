@@ -134,7 +134,7 @@ What the dashboard shows today:
 - **Employer market:** offer rate and average generosity over time.
 - **Iron Triangle:** the package against the no-reform run on affordability, quality and access. Access is `1 − care gap / 0.25`, clamped to [0, 1].
 - **Reform marker:** every time-series chart carries a dashed line at the reform year and a shaded band over any phase-in.
-- **Absent quantities:** a series stops where the thing it measures stops existing (private premiums and employer offers under single payer, private-sector waits and prices when delivery is all public). Nothing is drawn as zero or carried forward.
+- **Absent quantities:** a series stops where the thing it measures stops existing (private premiums and employer plan generosity under single payer, private-sector waits and prices when delivery is all public); nothing is carried forward from the last year it existed. The employer offer rate is the exception that is drawn at zero under single payer, because zero is its true value.
 
 **"Why?" drill-down:** a year slider lists that year's narrative events by module (policy, coverage, insurer, provider, market, government), e.g. *"The reform takes effect this year. What changes — single payer: off → on; public payment rate: 0.6 → 0.9."* Dollar figures in narratives are scaled to a US-sized population so they match the tiles.
 
