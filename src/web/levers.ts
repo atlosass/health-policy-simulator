@@ -55,9 +55,9 @@ export const LEVERS: Lever[] = [
 
   // Provider market
   { kind: "nullableRange", key: "priceCapIndex", group: "Provider market", label: "All-payer price cap", help: "Hard cap on commercial provider prices (1.0 = baseline). Below provider cost (~0.85) drives exit. Off = no cap.", min: 0.5, max: 1.5, step: 0.05, offLabel: "no cap", fmt: ratio },
-  { kind: "range", key: "antitrustStringency", group: "Provider market", label: "Antitrust stringency", help: "Probability a proposed provider merger is blocked. Higher = more competition preserved.", min: 0, max: 1, step: 0.1, fmt: ratio },
-  { kind: "range", key: "certificateOfNeed", group: "Provider market", label: "Certificate of Need", help: "Friction on new hospital capacity. Higher = slower entry (protects incumbents).", min: 0, max: 1, step: 0.1, fmt: ratio },
-  { kind: "range", key: "residencySlots", group: "Provider market", label: "Residency slots / scope", help: "Multiplier on physician supply growth. >1 trains/admits more clinicians.", min: 0.5, max: 2, step: 0.1, fmt: mult },
+  { kind: "range", key: "antitrustStringency", group: "Provider market", label: "Antitrust stringency", help: "Probability a proposed provider merger is blocked. Providers propose mergers more often the more a merger would raise their prices, so this matters most where commercial prices are unregulated.", min: 0, max: 1, step: 0.1, fmt: ratio },
+  { kind: "range", key: "certificateOfNeed", group: "Provider market", label: "Certificate of Need", help: "Share of new hospital capacity that regulators refuse (replacing worn-out capacity is exempt). Hospitals normally expand when demand outgrows them, about 3 years after they commit. At 100% they cannot expand at all, so a queue opened by higher demand never clears.", min: 0, max: 1, step: 0.1, fmt: ratio },
+  { kind: "range", key: "residencySlots", group: "Provider market", label: "Residency slots / scope", help: "Multiplier on how many new physicians can enter training each year. At 1.00× the workforce can grow about 1.5% a year at most; below about 0.7× retirements outrun new physicians and it shrinks. Any change takes 7 years (the training lag) to reach patients.", min: 0.5, max: 2, step: 0.1, fmt: mult },
 ];
 
 export const LEVER_GROUPS = [...new Set(LEVERS.map((l) => l.group))];

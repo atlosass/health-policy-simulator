@@ -21,7 +21,7 @@ Other commands:
 | `npm run dev` | Build, then serve at http://localhost:5173/ |
 | `npm run build` | Compile `src/` to browser modules in `web/dist/` |
 | `npm run serve` | Serve `web/` without rebuilding |
-| `npm test` | Run the 52 regression tests (about 10 seconds) |
+| `npm test` | Run the 68 regression tests (about 20 seconds) |
 | `npm run typecheck` | Type-check without building |
 
 To put the simulator online, run `npm run build` and upload the `web/` folder to any static host (GitHub Pages, Netlify, the LMS). There is no server component.
@@ -45,6 +45,8 @@ To put the simulator online, run `npm run build` and upload the `web/` folder to
 
 **Iron Triangle over time.** The year bar above the charts (slider and Play button) picks a year. The triangle shows that year against the no-reform run in the same year, and the chart beside it plots the three scores (affordability, quality, access) for every year, with dashed lines for no reform and a cursor at the selected year.
 
+**Supply and wages.** "Private provider capacity" shows hospital and physician capacity relative to year 0: it follows demand, but only after a construction or training lag and only as far as Certificate of Need and residency slots allow. The premiums chart includes the cash wages that workers at offering firms give up to pay the employer's share.
+
 **Charts.** The dashed line marks the reform year and a shaded band marks any phase-in. A line stops where the thing it measures stops existing: private premiums end under single payer, and private-sector wait times end when delivery is all public.
 
 **Why?** The panel under the charts follows the same selected year (it has its own copy of the slider) and lists what happened in it and why: the reform taking effect, coverage shifts, premium changes, mergers, entry and exit, queues, the fiscal ledger.
@@ -55,8 +57,8 @@ To put the simulator online, run `npm run build` and upload the `web/` folder to
 
 - **Households** (8,000 in the browser, 10,000 in tests): income, age, health risk, risk aversion; they choose coverage, use care in response to out-of-pocket prices, and carry a health stock that falls when care is missed.
 - **Insurers**: premiums set on last year's claims, so adverse-selection spirals play out over several years; community rating, risk adjustment.
-- **Employers**: whether to offer coverage (recruitment value and the tax subsidy against a per-worker fixed cost) and how generous a plan to offer.
-- **Providers**: hospitals and physicians, prices that rise with concentration, mergers checked by antitrust, entry and exit with lags, and queues when demand exceeds capacity.
+- **Employers**: whether to offer coverage (recruitment value and the tax subsidy against a per-worker fixed cost) and how generous a plan to offer. The employer's share of the premium comes out of workers' cash wages.
+- **Providers**: hospitals and physicians. Prices rise with concentration; mergers are proposed when they would raise revenue, and antitrust decides whether they go through; capacity follows demand after a construction lag (3 years) or training lag (7 years), subject to Certificate of Need and residency slots; queues form when demand exceeds capacity.
 - **Government**: premium subsidies, public insurance, single payer, and VA/NHS-style direct provision, with every public dollar costing about $1.30 once the cost of taxation is counted.
 
 [DESIGN.md](DESIGN.md) has the full specification, the calibration choices, and the validation scenarios.
@@ -65,10 +67,11 @@ To put the simulator online, run `npm run build` and upload the `web/` folder to
 
 These matter when interpreting results in class.
 
-- **Supply responds only to profit.** New provider capacity enters only after sustained high margins. Under single payer the queue that opens in the reform year therefore persists, because administered prices never create the margins that would draw entry.
-- **Certificate of Need and residency slots rarely matter.** They scale entry, and entry seldom triggers. With the other levers at current law, moving these two changes nothing at all.
-- **Wage incidence is reported, not applied.** The model reports how much of the ESI premium workers bear through wages, but does not reduce their take-home income.
-- **Baseline health spending runs low.** It comes out between about 15% and 17.5% of GDP depending on the seed, against a real figure near 17.5%.
+- **Supply timing is stylized.** Hospitals take 3 years to add capacity and physicians 7, and the physician workforce can grow about 1.5% a year at most unless residency slots are raised. These are round numbers chosen to be plausible, not estimates.
+- **Mergers only raise prices.** The model has no merger efficiencies or quality effects, so a merger that cannot raise prices (single payer, a binding price cap) has no motive and does not happen.
+- **Household pay ignores taxes.** Employer premium contributions come out of cash wages, but the taxes that finance public coverage are not deducted from household pay; they appear only in the government ledger. Take-home pay is therefore not comparable between privately and publicly financed systems.
+- **Idle capacity is free.** Provider costs have no fixed component, so a high-margin market can carry excess capacity without its margins falling.
+- **Baseline health spending runs low.** It comes out between about 15% and 18% of GDP depending on the seed (mean about 16%), against a real figure near 17.5%.
 - **Employer plan generosity barely responds to the tax exclusion.** Repeal mostly reduces small-firm offers and leaves plan richness nearly unchanged.
 - **One seed, one draw.** A run is a single random draw. Small differences between two packages can be noise; the dashboard does not yet show a range across seeds.
 - **Scope.** Nonelderly adults, a single national market, no drug sector, no Medicare.

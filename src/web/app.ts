@@ -323,16 +323,19 @@ function renderDashboard(): void {
   // stop where those markets end (single payer).
   const silver = ys.map((y) => (y.policy.singlePayer ? null : y.premiums.silver));
   const esiPremium = ys.map((y) => (y.employer.offerRate > 0 ? y.employer.avgPremium : null));
+  // What a worker at an offering firm gives up in cash wages to fund the employer's share.
+  const wageOffset = ys.map((y) => (y.employer.offerRate > 0 ? y.employer.wageOffsetPerOfferedWorker : null));
   const premChart =
     silver.every((v) => v === null) && esiPremium.every((v) => v === null)
       ? noteCard("Private premiums", "Not applicable — there are no private insurance markets under single payer.")
       : lineChart({
-          title: last.policy.singlePayer ? "Private premiums (end with single payer)" : "Private premiums",
+          title: last.policy.singlePayer ? "Private premiums (end with single payer)" : "Private premiums and the wages that pay for them",
           yFmt: dollars,
           marker,
           series: [
             { label: "Indiv. silver", color: "#16a34a", values: silver },
             { label: "Avg ESI", color: "#2563eb", values: esiPremium },
+            { label: "ESI cost taken from wages", color: "#d97706", values: wageOffset },
           ],
         });
 
@@ -348,6 +351,21 @@ function renderDashboard(): void {
         ? [{ label: "Public system", color: "#0891b2", values: ys.map((y) => y.publicProvision?.waitWeeks ?? null) }]
         : []),
     ],
+  });
+
+  // Supply: capacity relative to year 0. It follows demand with a lag
+  // (construction, training) and only where policy and payment rates allow.
+  const cap0 = { hospital: ys[0]!.providers.hospital.capacity, physician: ys[0]!.providers.physician.capacity };
+  const capacityChart = lineChart({
+    title: "Private provider capacity (year 0 = 1.00)",
+    yFmt: (v) => v.toFixed(2),
+    yMin: 0.5,
+    marker,
+    series: [
+      { label: "Hospital", color: "#ea580c", values: ys.map((y) => (y.providers.hospital.active ? y.providers.hospital.capacity / cap0.hospital : null)) },
+      { label: "Physician", color: "#7c3aed", values: ys.map((y) => (y.providers.physician.active ? y.providers.physician.capacity / cap0.physician : null)) },
+    ],
+    reference: { value: 1, label: "year 0" },
   });
 
   // What private providers are actually paid per unit of care, across all
@@ -395,7 +413,7 @@ function renderDashboard(): void {
     `<div class="tiles">${tiles}</div>` +
     `<div class="grid">${yearBar()}` +
     `<div class="cell" id="triCell">${triangleChart()}</div><div class="cell" id="scoreCell">${scoreChart()}</div>` +
-    `${coverageChart}${costChart}${waitChart}${premChart}${priceChart}${distChart}${innoChart}${employerChart(ys, marker)}${govChart(ys, marker)}</div>` +
+    `${coverageChart}${costChart}${waitChart}${capacityChart}${premChart}${priceChart}${distChart}${innoChart}${employerChart(ys, marker)}${govChart(ys, marker)}</div>` +
     drillDown();
 
   // Both year sliders (above the triangle and in the "Why?" panel) pick the same year.

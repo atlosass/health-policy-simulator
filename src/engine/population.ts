@@ -53,6 +53,7 @@ function drawHousehold(rng: Rng, id: number, age: number): Household {
     id,
     age,
     income,
+    cashIncome: income,
     frailty,
     riskAversion: lognormal(
       rng,

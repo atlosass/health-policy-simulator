@@ -10,14 +10,23 @@ export interface EsiOffer {
   premium: number;
   /** Forgone tax revenue on the excluded premium — a government tax expenditure. */
   taxSubsidy: number;
-  /** What the worker effectively bears (premium net of the tax subsidy), via wages + employee share. */
+  /** The employee's share of the premium, after tax: the salient cost of enrolling. */
   workerCost: number;
+  /** The employer's contribution per enrolled worker, which the firm recovers through lower wages. */
+  employerContribution: number;
 }
 
 export interface Household {
   id: number;
   age: number;
+  /** Total annual compensation the worker's labor commands (wages plus any employer premium contribution). Fixed. */
   income: number;
+  /**
+   * Cash wages this year: total compensation less what the employer recovers
+   * for premium contributions. This is the income that eligibility rules,
+   * affordability tests and out-of-pocket limits see.
+   */
+  cashIncome: number;
   /** Persistent multiplicative health-risk factor (lognormal, income-graded). */
   frailty: number;
   /** CARA-style risk-aversion coefficient. */
@@ -120,7 +129,7 @@ export type TierPremiums = Record<TierId, number>;
 
 export interface ExplanationEvent {
   year: number;
-  module: "insurer" | "coverage" | "government" | "market" | "provider" | "policy";
+  module: "insurer" | "coverage" | "government" | "market" | "provider" | "employer" | "policy";
   type: string;
   /** Structured drivers backing the narrative — feeds the drill-down UI. */
   data: Record<string, number | string>;
@@ -186,8 +195,10 @@ export interface YearResult {
     avgPremium: number;
     /** Average actuarial value of offered plans (generosity). */
     avgActuarialValue: number;
-    /** Average compensation per ESI enrollee diverted into health premiums (wage incidence). */
-    wageIncidencePerEnrollee: number;
+    /** Average employee premium share per ESI enrollee, after tax (what workers see deducted). */
+    employeeSharePerEnrollee: number;
+    /** Average cash wages given up per worker at an offering firm, to pay for the employer's premium contributions. */
+    wageOffsetPerOfferedWorker: number;
   };
   health: {
     meanHealthStock: number;
@@ -221,6 +232,8 @@ export interface SectorSnapshot {
   hhi: number;
   /** Annual care capacity (in baseline-price care units). */
   capacity: number;
+  /** Net capacity change already committed and on its way (under construction or in training); negative when retirements will outrun replacements. */
+  pipelineCapacity: number;
   /** Realized demand/capacity this year. */
   utilization: number;
   /** Commercial price index relative to the baseline (1.0). What private insurers are charged; nobody pays it under single payer. */

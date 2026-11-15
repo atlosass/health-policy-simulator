@@ -1,21 +1,28 @@
 import { PARAMS } from "./params.ts";
-import type { Rng } from "./rng.ts";
 import type { ExplanationEvent, Policy, SectorSnapshot } from "./types.ts";
 
 export type SectorId = "hospital" | "physician";
 export const SECTOR_IDS: readonly SectorId[] = ["hospital", "physician"];
 
 /**
- * Mutable state for one provider sector. Capacity and firm count evolve over
- * time via entry (lagged), exit, and mergers. `firms` is continuous so that
- * gradual entry/exit move the HHI smoothly; mergers move it in discrete steps.
+ * Mutable state for one provider sector. Capacity follows expected demand with
+ * a lag (construction for hospitals, training for physicians), firms enter
+ * when margins are fat, exit when they are negative, and merge when a merger
+ * would pay. `firms` is continuous so that gradual entry/exit move the HHI
+ * smoothly; mergers move it in discrete steps.
  */
 export interface SectorState {
   id: SectorId;
   capacity: number;
   baselineCapacity: number;
   firms: number;
-  /** Capacity (and accompanying firms) in the construction/training pipeline, indexed by years-until-arrival − 1. */
+  /** The demand providers plan capacity for: a moving average of realized demand. */
+  expectedDemand: number;
+  /**
+   * NET capacity changes already committed (and any new firms coming with
+   * them), indexed by years-until-arrival − 1. An entry is negative when the
+   * capacity retiring that year will outrun the replacements started for it.
+   */
   pipeline: { capacity: number; firms: number }[];
 }
 
@@ -59,6 +66,7 @@ function newSector(id: SectorId): SectorState {
     capacity: 0,
     baselineCapacity: 0,
     firms: cfg.initialFirms,
+    expectedDemand: 0,
     pipeline: Array.from({ length: cfg.entryLagYears }, () => ({ capacity: 0, firms: 0 })),
   };
 }
@@ -88,6 +96,7 @@ export function ensureCapacity(
     const cap = demand[id] / PARAMS.targetUtilization;
     state[id].capacity = cap;
     state[id].baselineCapacity = cap;
+    state[id].expectedDemand = demand[id];
   }
   state.baselineTotalDemand = demand.hospital + demand.physician + publicProvisionDemand;
   state.initialized = true;
@@ -140,66 +149,186 @@ export function clearSector(sector: SectorState, demand: number, policy: Policy)
   return { commercialPriceIndex, publicPriceIndex, deliveredFraction, waitWeeks, utilization, hhi };
 }
 
+/** What a sector learned this year, which drives its decisions for the next. */
+export interface SectorSignals {
+  /** Blended operating margin across all payers. */
+  margin: number;
+  /** Care demanded this year, before any rationing. */
+  demand: number;
+  /** Share of the sector's revenue that came from commercial payers (0 under single payer). */
+  commercialShare: number;
+  /** The commercial price index charged this year (after any price cap). */
+  commercialPriceIndex: number;
+}
+
 /**
- * Evolve a sector after the year's margin is known: induce entry (lagged) when
- * margins are fat, force exit when they go negative, and let firms merge under
- * margin pressure (subject to antitrust). Advance the construction/training
- * pipeline. Returns any narrative events.
+ * The proportional revenue gain a sector would get from one more merger: the
+ * commercial price rise from having one fewer competitor (zero where a price
+ * cap already binds), times the share of revenue that commercial payers
+ * provide. Zero when prices are administered — there is nothing to gain.
+ */
+export function mergerGain(firms: number, signals: SectorSignals, policy: Policy): number {
+  if (firms <= PARAMS.minFirms || signals.commercialShare <= 0 || signals.commercialPriceIndex <= 0) return 0;
+  const after = Math.max(PARAMS.minFirms, firms - 1);
+  let newPrice = signals.commercialPriceIndex * Math.pow(firms / after, PARAMS.hhiPriceElasticity);
+  if (policy.priceCapIndex !== null) newPrice = Math.min(newPrice, policy.priceCapIndex);
+  const priceGain = Math.max(0, newPrice / signals.commercialPriceIndex - 1);
+  return signals.commercialShare * priceGain;
+}
+
+const pctOf = (x: number, base: number): number => Math.round((x / base) * 100);
+const pct1Of = (x: number, base: number): number => Math.round((x / base) * 1000) / 10;
+/** Supply changes smaller than this share of baseline capacity are not worth a narrative event. */
+const NOTABLE = 0.005;
+
+/**
+ * Evolve a sector once the year's results are known.
+ *
+ *  • Supply follows demand. Providers plan for expected demand at the target
+ *    utilization and commit to close part of any gap each year, on top of
+ *    replacing capacity that retires. New capacity arrives after the sector's
+ *    lag. Two policy gates sit on this: Certificate of Need blocks a share of
+ *    new hospital capacity (replacement is exempt), and residency slots cap
+ *    how many new physicians can enter training each year. Providers invest
+ *    only if it pays: below `investMargin` they scale back, and at a zero
+ *    margin they stop even replacing what retires.
+ *  • Fat margins additionally pull in new firms (entry), which re-fragments a
+ *    consolidated market.
+ *  • Negative margins force immediate exit.
+ *  • Mergers are proposed for the revenue they would bring (`mergerGain`),
+ *    more urgently in distress, and antitrust review decides whether they
+ *    go through. `draws` are this sector-year's two uniform random numbers
+ *    (proposal, review); they are drawn every year whether or not they are
+ *    used, so the merger process never shifts any other random draw.
  *
  * A sector with no patients (`active` false — all care has moved to a public
- * delivery system) is dormant: it has no margin to react to, so nothing
- * enters, exits, or merges.
+ * delivery system) is dormant: it has no margin or demand to react to, so
+ * nothing is built, exits, or merges.
  */
 export function updateSector(
   sector: SectorState,
-  margin: number,
+  signals: SectorSignals,
   policy: Policy,
-  rng: Rng,
+  draws: { propose: number; review: number },
   year: number,
   active = true,
 ): ExplanationEvent[] {
   const events: ExplanationEvent[] = [];
   const cfg = PARAMS.providerSectors[sector.id];
   const capacityPerFirm = sector.baselineCapacity / cfg.initialFirms;
-  const label = sector.id === "hospital" ? "Hospital" : "Physician";
+  const isHospital = sector.id === "hospital";
+  const label = isHospital ? "Hospital" : "Physician";
+  const floor = PARAMS.capacityFloorFraction * sector.baselineCapacity;
+  const { margin } = signals;
 
   if (!active) {
-    const arriving = sector.pipeline.shift()!;
-    sector.capacity += arriving.capacity;
-    sector.firms += arriving.firms;
-    sector.pipeline.push({ capacity: 0, firms: 0 });
+    advancePipeline(sector, floor);
     return events;
   }
 
-  // Entry: fat margins attract new capacity, arriving after the sector's lag.
-  if (margin > PARAMS.entryMargin) {
-    const entryScale =
-      sector.id === "hospital" ? 1 - policy.certificateOfNeed : policy.residencySlots;
-    const added = PARAMS.entryRate * (margin - PARAMS.entryMargin) * sector.baselineCapacity * Math.max(0, entryScale);
-    if (added > 0) {
-      const slot = sector.pipeline[sector.pipeline.length - 1]!;
-      slot.capacity += added;
-      slot.firms += added / capacityPerFirm;
-      events.push({
-        year,
-        module: "provider",
-        type: "provider-entry",
-        data: {
-          sector: sector.id,
-          marginPct: Math.round(margin * 100),
-          lagYears: cfg.entryLagYears,
-          capacityAddedPct: Math.round((added / sector.baselineCapacity) * 100),
-        },
-        narrative:
-          `${label} margins of ${Math.round(margin * 100)}% are drawing new entrants, but the capacity ` +
-          `won't come online for ${cfg.entryLagYears} years (${sector.id === "hospital" ? "construction" : "training"} lag).`,
-      });
-    }
+  // ---- Supply: replacement + demand-driven expansion + profit-pull entry. ----
+  sector.expectedDemand =
+    (1 - PARAMS.demandExpectationWeight) * sector.expectedDemand + PARAMS.demandExpectationWeight * signals.demand;
+  const pending = sector.pipeline.reduce((sum, slot) => sum + slot.capacity, 0);
+  const gap = sector.expectedDemand / PARAMS.targetUtilization - sector.capacity - pending;
+  const replacement = cfg.attritionRate * sector.capacity;
+  const profitPull =
+    margin > PARAMS.entryMargin ? PARAMS.entryRate * (margin - PARAMS.entryMargin) * sector.baselineCapacity : 0;
+  // What providers would start building or training this year if nothing stood in the way.
+  const desired = Math.max(0, replacement + PARAMS.supplyAdjustRate * gap + profitPull);
+
+  // Policy gates.
+  let allowed: number;
+  if (cfg.trainingCapRate === null) {
+    // Certificate of Need: replacement goes ahead, a share of new capacity is refused.
+    const expansion = Math.max(0, desired - replacement);
+    allowed = Math.min(desired, replacement) + expansion * (1 - Math.min(1, Math.max(0, policy.certificateOfNeed)));
+  } else {
+    // Residency slots: a ceiling on how many can enter training in a year.
+    allowed = Math.min(desired, cfg.trainingCapRate * Math.max(0, policy.residencySlots) * sector.baselineCapacity);
+  }
+  const blocked = desired - allowed;
+
+  // Willingness to invest at this margin.
+  const willingness = Math.min(1, Math.max(0, margin / PARAMS.investMargin));
+  const started = allowed * willingness;
+  const net = started - replacement;
+
+  // New firms come with the profit-pull share of any net expansion.
+  const expansionWanted = Math.max(0, desired - replacement);
+  const entrantShare = expansionWanted > 0 ? Math.min(1, profitPull / expansionWanted) : 0;
+  const newFirms = net > 0 ? (net * entrantShare) / capacityPerFirm : 0;
+
+  const slot = sector.pipeline[sector.pipeline.length - 1]!;
+  slot.capacity += net;
+  slot.firms += newFirms;
+
+  const lagWord = isHospital ? "construction" : "training";
+  if (newFirms > 0) {
+    events.push({
+      year,
+      module: "provider",
+      type: "provider-entry",
+      data: {
+        sector: sector.id,
+        marginPct: Math.round(margin * 100),
+        lagYears: cfg.entryLagYears,
+        capacityAddedPct: pctOf(net, sector.baselineCapacity),
+      },
+      narrative:
+        `${label} margins of ${Math.round(margin * 100)}% are drawing new entrants, but the capacity ` +
+        `won't come online for ${cfg.entryLagYears} years (${lagWord} lag).`,
+    });
+  } else if (net >= 0.01 * sector.baselineCapacity && sector.expectedDemand > (PARAMS.targetUtilization + 0.01) * sector.capacity) {
+    events.push({
+      year,
+      module: "provider",
+      type: "capacity-expansion",
+      data: {
+        sector: sector.id,
+        capacityAddedPct: pct1Of(net, sector.baselineCapacity),
+        lagYears: cfg.entryLagYears,
+        demandVsCapacityPct: pctOf(sector.expectedDemand, sector.capacity),
+      },
+      narrative:
+        `${label}s expect demand at ${pctOf(sector.expectedDemand, sector.capacity)}% of their capacity, above the ` +
+        `${Math.round(PARAMS.targetUtilization * 100)}% they plan for. They committed to expand capacity by ` +
+        `${pct1Of(net, sector.baselineCapacity)}%, arriving in ${cfg.entryLagYears} years (${lagWord} lag).`,
+    });
+  }
+  // A gate matters only for capacity providers would actually have started.
+  const blockedInvestment = blocked * willingness;
+  if (blockedInvestment >= NOTABLE * sector.baselineCapacity) {
+    events.push({
+      year,
+      module: "provider",
+      type: "supply-gate",
+      data: {
+        sector: sector.id,
+        wantedPct: pct1Of(desired, sector.baselineCapacity),
+        allowedPct: pct1Of(allowed, sector.baselineCapacity),
+      },
+      narrative: isHospital
+        ? `Certificate of Need review refused new hospital capacity worth ${pct1Of(blocked, sector.baselineCapacity)}% of the sector — expansion that demand called for will not be built.`
+        : `Residency slots are full. Training can admit new physicians worth ${pct1Of(allowed, sector.baselineCapacity)}% of the workforce a year ` +
+          `(about ${pct1Of(replacement, sector.baselineCapacity)}% just replaces those retiring), but demand called for ${pct1Of(desired, sector.baselineCapacity)}%.`,
+    });
+  }
+  // Losses are reported by the exit event below; this covers thin but positive margins.
+  if (margin >= PARAMS.exitMargin && allowed - started >= NOTABLE * sector.baselineCapacity) {
+    events.push({
+      year,
+      module: "provider",
+      type: "underinvestment",
+      data: { sector: sector.id, marginPct: Math.round(margin * 100), forgonePct: pctOf(allowed - started, sector.baselineCapacity) },
+      narrative:
+        `At a margin of ${Math.round(margin * 100)}%, ${label.toLowerCase()}s are not ${net < 0 ? "replacing capacity that retires" : "expanding as demand calls for"} ` +
+        `— payment rates do not justify the investment, so capacity will ${net < 0 ? "shrink" : "lag demand"} in ${cfg.entryLagYears} years.`,
+    });
   }
 
-  // Exit: sustained losses shrink capacity (and firm count) immediately.
+  // ---- Exit: losses close capacity (and firms) immediately. ----
   if (margin < PARAMS.exitMargin) {
-    const floor = PARAMS.capacityFloorFraction * sector.baselineCapacity;
     const removed = Math.min(
       sector.capacity - floor,
       PARAMS.exitRate * (PARAMS.exitMargin - margin) * sector.capacity,
@@ -214,23 +343,24 @@ export function updateSector(
         data: {
           sector: sector.id,
           marginPct: Math.round(margin * 100),
-          capacityRemovedPct: Math.round((removed / sector.baselineCapacity) * 100),
+          capacityRemovedPct: pctOf(removed, sector.baselineCapacity),
         },
         narrative:
-          `${label}s are losing money (margin ${Math.round(margin * 100)}%); ${Math.round((removed / sector.baselineCapacity) * 100)}% ` +
+          `${label}s are losing money (margin ${Math.round(margin * 100)}%); ${pctOf(removed, sector.baselineCapacity)}% ` +
           `of baseline capacity has exited the market, tightening access.`,
       });
     }
   }
 
-  // Mergers: firms seek market power opportunistically (base propensity), and
-  // always try when margins are distressed. Antitrust stringency is what stops
-  // them — the policy lever's main channel. Entry (above) is the counter-force.
+  // ---- Mergers: proposed for the revenue they would bring. ----
+  const gain = mergerGain(sector.firms, signals, policy);
   const distressed = margin < PARAMS.mergerMargin;
-  const propensity = distressed ? 1 : PARAMS.baseMergerPropensity;
-  if (sector.firms > PARAMS.minFirms && rng() < propensity) {
-    if (rng() > policy.antitrustStringency) {
-      sector.firms -= 1;
+  const propensity =
+    1 - Math.exp(-PARAMS.mergerGainSensitivity * gain * (distressed ? PARAMS.distressMergerUrgency : 1));
+  if (draws.propose < propensity) {
+    if (draws.review > policy.antitrustStringency) {
+      const priceGainPct = Math.round((gain / signals.commercialShare) * 100);
+      sector.firms = Math.max(PARAMS.minFirms, sector.firms - 1);
       events.push({
         year,
         module: "provider",
@@ -240,11 +370,12 @@ export function updateSector(
           firms: Math.round(sector.firms),
           hhi: Math.round(hhiOf(sector.firms)),
           distressed: distressed ? 1 : 0,
+          expectedPriceGainPct: priceGainPct,
         },
         narrative:
           `Two ${label.toLowerCase()}s merged${distressed ? " under margin pressure" : ""} ` +
-          `(now ~${Math.round(sector.firms)} firms, HHI ${Math.round(hhiOf(sector.firms)).toLocaleString()}).` +
-          (policy.singlePayer ? "" : ` Expect commercial prices to rise next year.`),
+          `(now ~${Math.round(sector.firms)} firms, HHI ${Math.round(hhiOf(sector.firms)).toLocaleString()}). ` +
+          `With one fewer competitor they can raise commercial prices about ${priceGainPct}% next year.`,
       });
     } else {
       events.push({
@@ -257,13 +388,16 @@ export function updateSector(
     }
   }
 
-  // Advance the pipeline: this year's arrivals become live capacity.
+  advancePipeline(sector, floor);
+  return events;
+}
+
+/** This year's arrivals (or net retirements) take effect; the pipeline moves up a year. */
+function advancePipeline(sector: SectorState, floor: number): void {
   const arriving = sector.pipeline.shift()!;
-  sector.capacity += arriving.capacity;
+  sector.capacity = Math.max(Math.min(floor, sector.capacity), sector.capacity + arriving.capacity);
   sector.firms += arriving.firms;
   sector.pipeline.push({ capacity: 0, firms: 0 });
-
-  return events;
 }
 
 export function snapshot(
@@ -278,6 +412,7 @@ export function snapshot(
     firms: sector.firms,
     hhi: clearing.hhi,
     capacity: sector.capacity,
+    pipelineCapacity: sector.pipeline.reduce((sum, slot) => sum + slot.capacity, 0),
     utilization: clearing.utilization,
     commercialPriceIndex: clearing.commercialPriceIndex,
     avgPricePaid,

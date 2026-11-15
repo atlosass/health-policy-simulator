@@ -5,7 +5,7 @@ import { generatePopulation, agePopulation, expectedCost } from "./population.ts
 import { chooseCoverage, type ChoiceResult } from "./choice.ts";
 import { realizedSpend, adequateSpend } from "./utilization.ts";
 import { seedPremiums, updatePremiums, emptyExperience, type PoolExperience } from "./insurer.ts";
-import { buildEsiContext, setEmployerOffers, tierAv } from "./employer.ts";
+import { buildEsiContext, setEmployerOffers, clearEmployerOffers, tierAv } from "./employer.ts";
 import { policyForYear, describeChanges } from "./reform.ts";
 import {
   createProviderState,
@@ -97,6 +97,9 @@ interface HouseholdYear {
 
 export function runSimulation(config: SimConfig): SimResult {
   const rng = mulberry32(config.seed);
+  // Merger proposals and reviews draw from their own stream, a fixed number of
+  // draws per year, so the provider market never shifts any household's draws.
+  const providerRng = mulberry32((config.seed ^ 0x9e3779b9) >>> 0);
   const pop = generatePopulation(rng, config.populationSize);
   let nextId = config.populationSize;
 
@@ -104,6 +107,8 @@ export function runSimulation(config: SimConfig): SimResult {
   let lastExperience: PoolExperience | null = null;
   let prevCoverage: CoverageCounts | null = null;
   let prevPriceIndex = 1; // households' adaptive expectation of provider prices
+  let prevEsiTakeup: number = PARAMS.esiInitialTakeup; // share of offered workers who enrolled last year
+  let prevWageOffset: number | null = null; // last wage offset reported in a narrative event
   const seedSilver = premiums.silver;
 
   const providers = createProviderState();
@@ -147,7 +152,8 @@ export function runSimulation(config: SimConfig): SimResult {
     if (lastExperience) {
       const updated = updatePremiums(premiums, lastExperience, year, policy.riskAdjustment);
       premiums = updated.premiums;
-      events.push(...updated.events);
+      // Posted premiums are moot in a year with no private insurance market.
+      if (!policy.singlePayer) events.push(...updated.events);
     }
 
     // 2. Employers decide whether (and how generously) to offer ESI, using a
@@ -157,7 +163,7 @@ export function runSimulation(config: SimConfig): SimResult {
     let offeredPremiumTotal = 0;
     let offeredAvTotal = 0;
     if (policy.singlePayer) {
-      for (const h of pop) h.esiOffer = null;
+      clearEmployerOffers(pop);
     } else {
       let muTotal = 0;
       let raTotal = 0;
@@ -173,7 +179,7 @@ export function runSimulation(config: SimConfig): SimResult {
         incomeTotal / pop.length,
         prevPriceIndex,
       );
-      setEmployerOffers(pop, esiCtx, policy);
+      setEmployerOffers(pop, esiCtx, policy, prevEsiTakeup);
       for (const h of pop) {
         if (h.esiOffer) {
           offeredCount++;
@@ -265,7 +271,8 @@ export function runSimulation(config: SimConfig): SimResult {
     let esiClaims = 0;
     let esiGrossPremium = 0; // full group premiums of enrolled workers
     let esiTaxExpenditure = 0; // forgone tax revenue on those premiums
-    let esiWorkerCostTotal = 0; // wage incidence borne by enrollees
+    let esiWorkerCostTotal = 0; // employee premium shares paid by enrollees
+    let wageOffsetTotal = 0; // cash wages given up at offering firms
     let subsidyOutlays = 0;
     let penaltyRevenue = 0;
     let publicProvisionOutlays = 0;
@@ -277,6 +284,7 @@ export function runSimulation(config: SimConfig): SimResult {
     let healthStockTotal = 0;
     let careGapTotal = 0;
     const revenue = { hospital: 0, physician: 0 };
+    const commercialRevenue = { hospital: 0, physician: 0 };
     const cost = { hospital: 0, physician: 0 };
     const deliveredPrivate = { hospital: 0, physician: 0 };
     const uninsuredByIncome: number[] = [];
@@ -284,6 +292,10 @@ export function runSimulation(config: SimConfig): SimResult {
 
     for (const rec of records) {
       const { h, choice, mu, shockMult } = rec;
+      // Wages given up to the employer's premium contributions are part of
+      // what the household pays for health care.
+      const wageOffset = h.income - h.cashIncome;
+      wageOffsetTotal += wageOffset;
 
       // ---- Public delivery system: free at point of use, funded by the budget. ----
       if (rec.usesPublicProvision) {
@@ -294,7 +306,7 @@ export function runSimulation(config: SimConfig): SimResult {
         totalCareDelivered += delivered;
         medical += opCost;
         coverage[choice.coverage]++;
-        oopBurdenTotal += 0; // free at the point of use; no premium for public/uninsured
+        oopBurdenTotal += wageOffset / h.income; // free at the point of use; no premium for public/uninsured
         totalIncome += h.income;
         incomes.push(h.income);
         uninsuredByIncome.push(choice.coverage === "uninsured" ? 1 : 0);
@@ -327,7 +339,7 @@ export function runSimulation(config: SimConfig): SimResult {
       if (plan === null) {
         // Uninsured: pay full price out of pocket up to an income cap; the rest
         // is uncompensated care the provider eats.
-        oop = Math.min(bill, PARAMS.uninsuredOopIncomeCap * h.income);
+        oop = Math.min(bill, PARAMS.uninsuredOopIncomeCap * h.cashIncome);
         claims = 0;
         uncompensated += bill - oop;
         collectedFraction = bill > 0 ? oop / bill : 0;
@@ -359,6 +371,10 @@ export function runSimulation(config: SimConfig): SimResult {
 
       revenue.hospital += billHosp * collectedFraction;
       revenue.physician += billPhys * collectedFraction;
+      if (choice.coverage === "esi" || choice.coverage === "individual") {
+        commercialRevenue.hospital += billHosp;
+        commercialRevenue.physician += billPhys;
+      }
       cost.hospital += deliveredQHosp * PARAMS.providerMarginalCost;
       cost.physician += deliveredQPhys * PARAMS.providerMarginalCost;
       deliveredPrivate.hospital += deliveredQHosp;
@@ -367,7 +383,7 @@ export function runSimulation(config: SimConfig): SimResult {
       coverage[choice.coverage]++;
       medical += bill;
       totalCareDelivered += deliveredQuantity;
-      oopBurdenTotal += (oop + choice.premiumPaid) / h.income;
+      oopBurdenTotal += (oop + choice.premiumPaid + wageOffset) / h.income;
       totalIncome += h.income;
       incomes.push(h.income);
       uninsuredByIncome.push(choice.coverage === "uninsured" ? 1 : 0);
@@ -404,8 +420,22 @@ export function runSimulation(config: SimConfig): SimResult {
     const commercialPayers = commercialSpend > 0;
     events.push(...emitProviderEvents(year, "hospital", clearH, snapHosp, prevYear(years)?.providers.hospital, commercialPayers));
     events.push(...emitProviderEvents(year, "physician", clearP, snapPhys, prevYear(years)?.providers.physician, commercialPayers));
-    events.push(...updateSector(providers.hospital, marginHosp, policy, rng, year, activeHosp));
-    events.push(...updateSector(providers.physician, marginPhys, policy, rng, year, activePhys));
+    const signalsHosp = {
+      margin: marginHosp,
+      demand: demandHosp,
+      commercialShare: revenue.hospital > 0 ? commercialRevenue.hospital / revenue.hospital : 0,
+      commercialPriceIndex: clearH.commercialPriceIndex,
+    };
+    const signalsPhys = {
+      margin: marginPhys,
+      demand: demandPhys,
+      commercialShare: revenue.physician > 0 ? commercialRevenue.physician / revenue.physician : 0,
+      commercialPriceIndex: clearP.commercialPriceIndex,
+    };
+    const drawsHosp = { propose: providerRng(), review: providerRng() };
+    const drawsPhys = { propose: providerRng(), review: providerRng() };
+    events.push(...updateSector(providers.hospital, signalsHosp, policy, drawsHosp, year, activeHosp));
+    events.push(...updateSector(providers.physician, signalsPhys, policy, drawsPhys, year, activePhys));
 
     // ---- Innovation: R&D funded by commercial revenue + provider margins. ----
     const avgMargin = (marginHosp + marginPhys) / 2;
@@ -488,6 +518,36 @@ export function runSimulation(config: SimConfig): SimResult {
           `and silver premiums have reached $${Math.round(premiums.silver).toLocaleString()} — ` +
           `an adverse-selection death spiral.`,
       });
+    }
+    // Wage pass-through: say so in the first year, when it moves by 5% or
+    // more, and when employer coverage ends.
+    const wageOffsetPerOffered = offeredCount > 0 ? wageOffsetTotal / offeredCount : 0;
+    if (offeredCount > 0 && (prevWageOffset === null || prevWageOffset === 0 || Math.abs(wageOffsetPerOffered / prevWageOffset - 1) >= 0.05)) {
+      const direction =
+        prevWageOffset === null || prevWageOffset === 0 ? "" : wageOffsetPerOffered > prevWageOffset ? ", up from" : ", down from";
+      events.push({
+        year,
+        module: "employer",
+        type: "wage-offset",
+        data: { wageOffset: Math.round(wageOffsetPerOffered), offerRatePct: pct(offeredCount / pop.length) },
+        narrative:
+          `Employer coverage is paid for out of wages: workers at firms that offer it take home about ` +
+          `$${Math.round(wageOffsetPerOffered).toLocaleString()} a year less than their work earns, the employer's share of premiums` +
+          (direction ? `${direction} $${Math.round(prevWageOffset!).toLocaleString()}.` : `.`),
+      });
+      prevWageOffset = wageOffsetPerOffered;
+    } else if (offeredCount === 0 && prevWageOffset !== null && prevWageOffset > 0) {
+      events.push({
+        year,
+        module: "employer",
+        type: "wage-offset",
+        data: { wageOffset: 0, offerRatePct: 0 },
+        narrative:
+          `With no employer coverage, the roughly $${Math.round(prevWageOffset).toLocaleString()} a year that offering firms held back ` +
+          `from each worker's pay for premiums returns to wages. The taxes that replace those premiums are counted in the ` +
+          `government ledger, not deducted from household pay.`,
+      });
+      prevWageOffset = 0;
     }
     if (hasPublicProvision && publicProvisionDelivered > 0) {
       const careShare = totalCareDelivered > 0 ? publicProvisionDelivered / totalCareDelivered : 0;
@@ -587,7 +647,8 @@ export function runSimulation(config: SimConfig): SimResult {
         offerRate: offeredCount / pop.length,
         avgPremium: offeredCount > 0 ? offeredPremiumTotal / offeredCount : 0,
         avgActuarialValue: offeredCount > 0 ? offeredAvTotal / offeredCount : 0,
-        wageIncidencePerEnrollee: coverage.esi > 0 ? esiWorkerCostTotal / coverage.esi : 0,
+        employeeSharePerEnrollee: coverage.esi > 0 ? esiWorkerCostTotal / coverage.esi : 0,
+        wageOffsetPerOfferedWorker: wageOffsetPerOffered,
       },
       providers: { hospital: snapHosp, physician: snapPhys },
       events,
@@ -601,6 +662,7 @@ export function runSimulation(config: SimConfig): SimResult {
         : 1;
     lastExperience = experience;
     prevCoverage = coverage;
+    if (offeredCount > 0) prevEsiTakeup = coverage.esi / offeredCount;
 
     nextId = agePopulation(rng, pop, nextId);
   }

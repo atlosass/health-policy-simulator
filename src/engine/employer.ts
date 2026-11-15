@@ -86,6 +86,7 @@ export function decideOffer(
   firmOfferShock: number,
   ctx: EsiContext,
   policy: Policy,
+  expectedTakeup = 1,
 ): EsiOffer | null {
   const tau = esiTaxRate(income);
   const cap = policy.taxExclusionCap;
@@ -107,27 +108,65 @@ export function decideOffer(
         premium,
         taxSubsidy: tau * excludable,
         workerCost: PARAMS.esiWorkerShare * premium * (1 - tau),
+        employerContribution: (1 - PARAMS.esiWorkerShare) * premium,
       };
     }
   }
 
   // Extensive margin: recruitment value (net of this firm's admin load) + tax
-  // subsidy + idiosyncratic shock vs. the per-worker fixed cost of offering.
+  // subsidy + idiosyncratic shock vs. the per-worker fixed cost of offering,
+  // and any part of the firm's contribution it cannot recover from wages
+  // because the worker is already near the wage floor.
   const offerSurplus =
     ctx.recruitmentValue -
     adminLoad * ctx.claims[best!.tier] +
     best!.taxSubsidy +
     firmOfferShock * PARAMS.esiOfferDispersion -
-    PARAMS.esiFixedCostPerWorker[firmSize];
+    PARAMS.esiFixedCostPerWorker[firmSize] -
+    unshiftedCost(income, best!.employerContribution * expectedTakeup);
 
   if (offerSurplus > 0 || policy.employerMandate) return best;
   return null;
 }
 
-/** Set each household's ESI offer for the year. */
-export function setEmployerOffers(pop: Household[], ctx: EsiContext, policy: Policy): void {
+/**
+ * How far a firm can cut a worker's cash wages to recover `cost`: wages cannot
+ * go below the wage floor (or below what the worker already earns, if that is
+ * under the floor).
+ */
+function wageRoom(income: number): number {
+  return Math.max(0, income - PARAMS.minCashWage);
+}
+
+/** The part of `cost` a firm cannot recover from the worker's wages. */
+function unshiftedCost(income: number, cost: number): number {
+  return Math.max(0, cost - wageRoom(income));
+}
+
+/**
+ * Set each household's ESI offer for the year, and with it their cash wages.
+ *
+ * Wage pass-through: a firm that offers coverage pays lower cash wages. The
+ * reduction is the firm's expected premium contribution per worker (its
+ * contribution per enrollee × the share of offered workers who enrolled last
+ * year), and it applies to every worker at an offering firm whether or not
+ * they enroll — which is why a worker deciding whether to enroll weighs only
+ * the employee share. Workers without an offer are paid their full
+ * compensation in cash.
+ */
+export function setEmployerOffers(pop: Household[], ctx: EsiContext, policy: Policy, expectedTakeup: number): void {
   for (const h of pop) {
-    h.esiOffer = decideOffer(h.income, h.firmAdminLoad, h.firmSize, h.firmOfferShock, ctx, policy);
+    h.esiOffer = decideOffer(h.income, h.firmAdminLoad, h.firmSize, h.firmOfferShock, ctx, policy, expectedTakeup);
+    const offset = h.esiOffer ? Math.min(wageRoom(h.income), h.esiOffer.employerContribution * expectedTakeup) : 0;
+    h.cashIncome = h.income - offset;
+  }
+}
+
+/** No employer coverage exists (single payer): everyone is paid their full compensation in cash. */
+export function clearEmployerOffers(pop: Household[]): void {
+  for (const h of pop) {
+    h.esiOffer = null;
+    h.cashIncome = h.income;
   }
 }
 

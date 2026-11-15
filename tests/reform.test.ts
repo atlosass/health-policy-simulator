@@ -96,7 +96,7 @@ test("single payer leaves no stale private-market readings", () => {
     assert.ok(res.years[REFORM_YEAR - 1]!.employer.offerRate > 0.5);
     for (const y of res.years.slice(REFORM_YEAR)) {
       assert.equal(y.coverage.esi, 0);
-      assert.deepEqual(y.employer, { offerRate: 0, avgPremium: 0, avgActuarialValue: 0, wageIncidencePerEnrollee: 0 });
+      assert.deepEqual(y.employer, { offerRate: 0, avgPremium: 0, avgActuarialValue: 0, employeeSharePerEnrollee: 0, wageOffsetPerOfferedWorker: 0 });
       assert.equal(y.government.esiTaxExpenditure, 0);
       assert.equal(
         y.events.some((e) => e.type === "price-change"),

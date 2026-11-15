@@ -97,7 +97,9 @@ export interface ChoiceResult {
 export function chooseCoverage(h: Household, ctx: ChoiceContext, rng: Rng): ChoiceResult {
   const { policy, expectedPriceIndex: pi } = ctx;
   const mu = expectedCost(h);
-  const fplMultiple = h.income / PARAMS.povertyLine;
+  // Eligibility and affordability rules see cash wages: employer premium
+  // contributions are not counted as income (as with MAGI).
+  const fplMultiple = h.cashIncome / PARAMS.povertyLine;
 
   // Subsidy (benchmark design): only without an ESI offer, below the cutoff,
   // and not public-eligible. Pegged to the silver premium the household faces.
@@ -110,14 +112,14 @@ export function chooseCoverage(h: Household, ctx: ChoiceContext, rng: Rng): Choi
   // The ESI firewall only bites if the offer is "affordable" (ACA rule): an
   // unaffordable offer leaves the worker subsidy-eligible.
   const firewalled =
-    h.esiOffer !== null && h.esiOffer.workerCost <= PARAMS.esiAffordabilityPct * h.income;
+    h.esiOffer !== null && h.esiOffer.workerCost <= PARAMS.esiAffordabilityPct * h.cashIncome;
   const subsidyEligible =
     policy.subsidiesEnabled &&
     !firewalled &&
     !publicEligible &&
     fplMultiple <= policy.subsidyCutoffMultiple;
   const subsidy = subsidyEligible
-    ? Math.max(0, silverPremium - requiredContribution(h.income))
+    ? Math.max(0, silverPremium - requiredContribution(h.cashIncome))
     : 0;
 
   type Option = ChoiceResult & { ce: number };
@@ -130,7 +132,7 @@ export function chooseCoverage(h: Household, ctx: ChoiceContext, rng: Rng): Choi
     subsidyUsed: 0,
     premiumPaid: 0,
     ce:
-      ceUninsured(mu, h.riskAversion, h.income, policy.mandatePenalty, pi) +
+      ceUninsured(mu, h.riskAversion, h.cashIncome, policy.mandatePenalty, pi) +
       gumbel(rng, PARAMS.choiceNoise),
   });
 

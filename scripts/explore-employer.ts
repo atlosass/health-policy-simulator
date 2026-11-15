@@ -12,7 +12,7 @@ import type { Policy } from "../src/engine/index.ts";
 function show(name: string, policy: Policy) {
   const res = runSimulation(reformConfig(policy, { years: 15 }));
   console.log(`\n=== ${name} ===`);
-  console.log("yr | esi  indiv pub  unins | offer% avgAV avgPrem wageInc | taxExp$M NHE/GDP DWL$M");
+  console.log("yr | esi  indiv pub  unins | offer% avgAV avgPrem wageOff | taxExp$M NHE/GDP DWL$M");
   for (const y of res.years) {
     const c = y.coverage;
     const e = y.employer;
@@ -27,7 +27,7 @@ function show(name: string, policy: Policy) {
         (e.offerRate * 100).toFixed(0).padStart(5),
         (e.avgActuarialValue * 100).toFixed(0).padStart(5),
         String(Math.round(e.avgPremium)).padStart(7),
-        String(Math.round(e.wageIncidencePerEnrollee)).padStart(7),
+        String(Math.round(e.wageOffsetPerOfferedWorker)).padStart(7),
         "|",
         (y.government.esiTaxExpenditure / 1e6).toFixed(0).padStart(7),
         (y.spending.nheShareOfGdp * 100).toFixed(1).padStart(6),

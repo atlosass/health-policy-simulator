@@ -107,8 +107,17 @@ export const PARAMS = {
   esiFixedCostPerWorker: { small: 2_300, medium: 400, large: 60 },
   /** Std. dev. ($) of idiosyncratic firm-level offer propensity (workforce health, management, local labor market) — smooths the extensive margin so it isn't an all-or-nothing cliff by size. */
   esiOfferDispersion: 1_300,
-  /** Employee share of the ESI premium (the salient take-up cost); the rest is employer-paid and shows up as wage incidence. */
+  /** Employee share of the ESI premium (the salient take-up cost); the rest is employer-paid and comes out of wages. */
   esiWorkerShare: 0.4,
+  /**
+   * Wage pass-through: an offering firm recovers its premium contributions by
+   * paying lower cash wages to its workers. Cash wages cannot be pushed below
+   * this floor (a full-time minimum-wage job); whatever cannot be shifted to
+   * the worker is a cost the firm bears, which counts against offering.
+   */
+  minCashWage: 15_000,
+  /** Take-up among offered workers that firms assume in year 0, before they have a previous year to go on. */
+  esiInitialTakeup: 0.8,
   /** ACA affordability threshold: an ESI offer forfeits exchange-subsidy eligibility only if the employee share is below this fraction of income. */
   esiAffordabilityPct: 0.0985,
   /** Worker's stickiness bonus for the default ESI plan ($ subtracted from the ESI option's certainty-equivalent cost). */
@@ -149,20 +158,38 @@ export const PARAMS = {
   priceIndexFloor: 0.25,
   /** Default administered public price as a fraction of baseline commercial (Medicare/Medicaid pay below commercial). */
   defaultPublicPriceRatio: 0.6,
-  /** Provider blended margin above which new capacity is induced (entry). */
+  /** Provider blended margin above which NEW FIRMS are drawn in (profit-pull entry, on top of demand-driven expansion). */
   entryMargin: 0.16,
   /** Provider blended margin below which capacity exits the market. */
   exitMargin: 0.0,
-  /** Provider blended margin below which firms seek mergers out of distress (always propose). */
+  /** Provider blended margin below which a sector is in distress (mergers become more urgent). */
   mergerMargin: 0.05,
   /**
-   * Baseline annual probability that a sector proposes an opportunistic merger
-   * (firms seek market power even when healthy). Antitrust stringency is what
-   * actually stops these — so this is the channel the antitrust lever acts on.
+   * Mergers are proposed for the revenue they would bring. The annual
+   * probability a sector proposes one is 1 − exp(−sensitivity × gain), where
+   * gain is the proportional revenue increase the merger would deliver: the
+   * commercial price rise from one fewer competitor × the share of revenue
+   * that comes from commercial payers. Calibrated so a 6-firm hospital market
+   * under current law proposes a merger about one year in four. Where prices
+   * are administered (single payer) or a binding price cap, the gain is zero
+   * and so is the merger rate. Antitrust then decides whether it goes through.
    */
-  baseMergerPropensity: 0.25,
+  mergerGainSensitivity: 2.4,
+  /** Distressed sectors pursue any available merger gain this many times more urgently. */
+  distressMergerUrgency: 3,
   /** Fraction of capacity added per year per unit of margin above the entry threshold. */
   entryRate: 0.6,
+  /**
+   * Demand-following supply: each year providers commit to close this fraction
+   * of the gap between the capacity that expected demand calls for
+   * (demand ÷ target utilization) and the capacity they have or have already
+   * committed. New capacity arrives after the sector's lag.
+   */
+  supplyAdjustRate: 0.75,
+  /** Weight on this year's demand when providers update the demand they plan for (the rest is last year's expectation). */
+  demandExpectationWeight: 0.5,
+  /** Providers invest fully only when the blended margin is at least this; below it investment scales down, to nothing at a zero margin. */
+  investMargin: 0.05,
   /** Fraction of capacity removed per year per unit of margin below the exit threshold. */
   exitRate: 0.25,
   /** Capacity cannot fall below this fraction of its seeded baseline (providers are partly fixed assets). */
@@ -170,9 +197,17 @@ export const PARAMS = {
   /** Per-sector firm-count floor (a market cannot consolidate past this). */
   minFirms: 3,
   /** Per-sector provider configuration: initial firms, entry lag (years), and a base wait-time scale (weeks). */
+  /**
+   * `attritionRate`: share of capacity that retires or wears out each year and
+   * must be replaced just to stand still. `trainingCapRate` (physicians only):
+   * the most new physician capacity the training pipeline can admit per year,
+   * as a share of baseline capacity, at residency slots = 1.0 — a little above
+   * replacement, so the physician workforce can grow about 1.5% a year at most
+   * under current law. The residency-slots lever multiplies it.
+   */
   providerSectors: {
-    hospital: { initialFirms: 6, entryLagYears: 3, baseWaitWeeks: 1.8 },
-    physician: { initialFirms: 18, entryLagYears: 7, baseWaitWeeks: 2.1 },
+    hospital: { initialFirms: 6, entryLagYears: 3, baseWaitWeeks: 1.8, attritionRate: 0.02, trainingCapRate: null },
+    physician: { initialFirms: 18, entryLagYears: 7, baseWaitWeeks: 2.1, attritionRate: 0.03, trainingCapRate: 0.045 },
   },
   /** Utilization ceiling in the wait-time denominator (waits blow up as utilization approaches it). */
   waitCeiling: 1.4,
