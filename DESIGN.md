@@ -2,7 +2,7 @@
 
 **Purpose:** A web-based simulator for *Introduction to Health Policy in the United States* that lets students design policy packages and watch cost, quality, and access outcomes unfold over a 10–20 year horizon. The central pedagogical goal is that Iron Triangle trade-offs **emerge from economic mechanisms** — they are never hard-coded.
 
-**Status:** Design v0.8 (November 2026) — Phases 1–4 complete: full engine (households, insurers, providers, employers, government incl. VA/NHS direct provision) and a working no-build web frontend, validated by 68 tests. November 2026 revisions: the **reform timeline** (§2a), the **care gap**, honest on-screen readings, **supply that follows demand** behind the Certificate of Need and residency-slot gates, **profit-driven mergers**, and **wage pass-through** of employer premiums (§3.2, §3.3). Remaining work is listed in §9; sections below mark anything specified but not built as *(not built)*.
+**Status:** Design v0.9 (November 2026) — the engine (households, insurers, providers, employers, government incl. VA/NHS direct provision), the no-build web frontend, and all three classroom modes are built, validated by 89 tests that run every scenario on several seeds. November 2026 revisions: the **reform timeline** (§2a), the **care gap**, **supply that follows demand**, **profit-driven mergers**, **wage pass-through** (§3.2, §3.3), **independent random draws per household**, a **calibration-target table** (§8), **multi-run ranges** on the dashboard, **per-chart explanations**, **challenges** and the **comparison view** (§5, §6). Remaining work is in §9; anything specified but not built is marked *(not built)*.
 
 ---
 
@@ -10,7 +10,7 @@
 
 1. **Emergent trade-offs.** No rule anywhere says "subsidies raise costs." Subsidies change household choices; choices change the risk pool and utilization; utilization meets provider capacity; prices or queues respond. The trade-off is a *consequence*, and the simulator can show the causal chain.
 2. **Explainability is the product.** Every outcome supports a "why?" drill-down: a narrative explanation chain backed by inspectable state (risk pool composition, provider HHI, queue lengths, budget ledger). Modules emit structured explanation events every simulated year.
-3. **Stylized but directionally right.** Baseline calibrated to a round-number 2024-ish US: ~92% coverage, ESI as the dominant source of coverage, and health spending targeted at ~17.5% of GDP (the model currently lands at 15–17.5% depending on the seed; see §8). Behavioral parameters from canonical literature (see §8). Framed explicitly as a teaching model, not a forecast.
+3. **Stylized but directionally right.** Baseline calibrated to a round-number 2024-ish US: ~92% coverage, ESI as the dominant source of coverage, and health spending of ~17.5% of GDP at the start of a run. The targets, their reference figures and the one known miss are tabulated in §8. Behavioral parameters from canonical literature (see §8). Framed explicitly as a teaching model, not a forecast.
 4. **Zero infrastructure.** Pure client-side static site. Seeded RNG for reproducibility. Policy packages and scenarios encoded in shareable URLs. No accounts, no server, nothing to maintain mid-semester.
 
 ---
@@ -57,7 +57,8 @@ A reform does not start from a blank slate: it lands on a system that already ha
 
 ### 3.1 Households
 - **Heterogeneity:** income, age, latent health risk (drawn from a skewed distribution — the 5%-of-people-drive-50%-of-spend fact), risk aversion.
-- **Coverage choice:** expected-utility comparison across available options: ESI (if offered), individual market plans, public program (if eligible), uninsured. Mandate penalties and subsidies enter the calculation directly.
+- **Coverage choice:** each year a household takes the option with the lowest certainty-equivalent cost among those available: ESI (if offered), individual market plans, public program (if eligible), uninsured. Mandate penalties and subsidies enter the calculation directly.
+- **Take-up frictions (added with the calibration table, §8):** signing up for coverage on your own carries an **enrollment hassle**, a persistent household trait in dollar terms: `150 + 10,000 × draw³ × exp(−cash income ÷ 30,000)`. Most households find it minor and a minority find it prohibitive, and it is heaviest at low incomes (forms, renewals, churn, not knowing you qualify). Public coverage carries all of it, individual-market plans 30% of it, employer coverage none. Going uninsured also costs more the more a household has to lose: 2% of cash income above $40,000 is added to the cost of being uninsured (assets at risk; coverage as a normal good). Together these produce the real pattern in which some people eligible for free coverage stay uninsured and high-income households rarely do.
 - **Utilization:** care demand responds to out-of-pocket price with elasticity ≈ −0.2 (RAND HIE). Some demand is discretionary (price-sensitive, lower marginal health value), some urgent (inelastic).
 - **Health stock (Grossman-style):** care consumption improves health with diminishing returns; forgone/delayed care (uninsurance, queues) depreciates the stock. Today's underinsurance worsens tomorrow's risk pool — the delayed quality cost.
 - **Emergent phenomena:** *adverse selection* when rating is restricted without take-up pressure (healthy exit → premiums spiral); *moral hazard* via the utilization elasticity.
@@ -129,7 +130,8 @@ Phase-in applies to the whole package, not lever by lever (§2a). *Not built:* b
 
 What the dashboard shows today:
 
-- **Tiles (final year, each with its change against the no-reform run):** insured rate, health spending (% of GDP), population health, care gap, innovation index, government social cost (scaled to a US-sized population).
+- **Tiles (final year, each with its change against the no-reform runs):** insured rate, health spending (% of GDP), population health, care gap, innovation index, government social cost (scaled to a US-sized population). Each number is the mean of five runs; a second line gives the lowest and highest run, and a change whose sign differs between runs is marked "could be luck" and left uncolored.
+- **Several runs, not one.** Every package is run five times on consecutive seeds, in background workers (the first result shows in about half a second, the rest shortly after). Lines are means; shaded bands are the range across runs. Because each household keeps the same luck under every policy (§7), each reform run has an exact no-reform twin, and differences are computed twin by twin.
 - **Coverage:** coverage mix over time (ESI / individual / public / uninsured); uninsured rate within each income third over time.
 - **Cost:** health spending as % of GDP against the no-reform path; private premiums, with the cash wages given up to pay the employer's share; prices paid to private providers (all payers, with a provider-cost reference line); government cost over time, itemized (subsidies, public insurance, direct provision, ESI tax break, deadweight loss).
 - **Quality:** population health index; innovation index against the no-reform path.
@@ -139,38 +141,59 @@ What the dashboard shows today:
 - **Reform marker:** every time-series chart carries a dashed line at the reform year and a shaded band over any phase-in.
 - **Absent quantities:** a series stops where the thing it measures stops existing (private premiums and employer plan generosity under single payer, private-sector waits and prices when delivery is all public); nothing is carried forward from the last year it existed. The employer offer rate is the exception that is drawn at zero under single payer, because zero is its true value.
 
-**"Why?" drill-down:** a year slider lists that year's narrative events by module (policy, coverage, insurer, provider, market, government), e.g. *"The reform takes effect this year. What changes — single payer: off → on; public payment rate: 0.6 → 0.9."* Dollar figures in narratives are scaled to a US-sized population so they match the tiles.
+**"Why?" panel, two ways in:** *by year* — a year slider lists that year's narrative events by module (policy, coverage, insurer, provider, employer, market, government), e.g. *"The reform takes effect this year. What changes — single payer: off → on; public payment rate: 0.6 → 0.9."* *By chart* — each chart has a **Why?** button that opens the explanation for that outcome: the mechanism in two or three sentences, where the lead series stood before the reform and at the end and when it moved most, and every event of the kinds that drive that chart, across all years (click a year to show it in the Iron Triangle). Events come from run 1, since the year in which a chance event such as a merger falls differs between runs. Dollar figures in narratives are scaled to a US-sized population so they match the tiles.
 
-*Not built:* take-up by health status, per-capita spending and out-of-pocket burden, provider HHI / margin / utilization charts (these appear only in drill-down events), overlaying several packages, and chart-to-explanation links (the drill-down is by year, not by chart).
+*Not built:* take-up by health status, per-capita spending and out-of-pocket burden, provider HHI / margin / utilization charts (these appear only in events), CSV export.
 
 ---
 
 ## 6. Classroom modes (all client-side)
 
-Only the solo sandbox exists today. Modes 2 and 3 are planned (§9); share links already carry everything they need (levers, timing, seed).
+All three are built. Everything travels in the URL: a package link carries the levers, the timing, the seed and any challenge; a comparison link carries a list of package links.
 
 1. **Solo sandbox** — default; free experimentation, instant runs.
-2. **Structured assignments** *(not built)* — instructor authors a *challenge*: starting scenario + success criteria (e.g., "≥95% coverage, ≤18% of GDP, median wait <3 weeks"). Encoded in a URL; students submit their result link; results are deterministic given seed + policy, so submissions are verifiable.
-3. **Team competition** *(not built)* — comparison screen loads multiple result links side-by-side on the Iron Triangle chart for in-class presentation.
+2. **Structured assignments (challenges)** — "Write a challenge" opens a form: a title and up to six targets, each a headline measure (the six tiles, plus the longest wait and the uninsured rate in the low-income third), "at least" or "at most", and a number. The instructor sets the levers to the starting point students should begin from and sends the share link. Students see a banner listing each target, where they stand, and whether it is met; they hand in their own share link. Targets are judged in the final year on the mean of the five runs, so anyone opening the link sees the same verdict. Links are validated on opening: a malformed or hand-edited challenge is dropped.
+3. **Team comparison** — "Compare packages" takes one share link per line (optionally `Name | link`, up to 12) and shows the packages side by side: an overlaid Iron Triangle, a table of the eight headline measures with the best value in each column highlighted, and each measure over time with one line per package and a dashed no-reform line. If any link carries a challenge, every package is judged against the first one found, and a package whose own link carries a different challenge is flagged — which is how an instructor checks submissions. "Open" loads a package into the simulator; "Copy comparison link" saves the whole list.
 
 ---
 
 ## 7. Technical architecture
 
-- **Engine:** TypeScript, pure functions, zero dependencies; seeded PRNG (mulberry32). 10k agents × 20 years runs in well under a second. Households and the provider market draw from separate random streams, so merger timing never shifts a household's draws. Households still share one stream among themselves, so a policy that changes how many draws one household makes shifts the draws of those after it; separate streams there are planned (§9).
+- **Engine:** TypeScript, pure functions, zero dependencies. 10k agents × 20 years runs in well under a second. **Randomness comes from three independent sources**, so nothing a policy does can reshuffle anyone's luck: a seeded stream (mulberry32) builds the population and each year's new entrants; every household's health shock and choice noise is *looked up* by a hash of (seed, household, year, purpose) instead of pulled off a shared sequence; and the provider market has its own stream with a fixed number of draws a year. Two policies on the same seed therefore face the same people with the same luck (common random numbers), which roughly halves the noise in a reform-versus-no-reform comparison.
 - **Zero-dependency toolchain (chosen because the project lives on Google Drive, which can't handle `node_modules`):** the whole stack is dependency-free. Node 24 runs the TypeScript engine natively; `node --test` is the test runner; `tsc` runs via `npx` from the C: cache. The **frontend is a no-build static app**: `tsc` (with `rewriteRelativeImportExtensions`) compiles `src/engine` + `src/web` to plain browser ES modules in `web/dist/`, and the browser loads them directly — no bundler, no `node_modules`, fully offline, deployable as static files anywhere.
-- **Frontend:** vanilla TypeScript + DOM, **hand-rolled SVG charts** (line, stacked-area, dollar stacked-area, Iron Triangle radar) — no React, no charting library. Policy panel (left, sticky: scenario menu, timing controls, levers) ⇄ live dashboard (6 tiles with hover tooltips; 12 charts, see §5) ⇄ "Why?" drill-down (per-year narrative events). Each change runs the reform once (8k agents × 20 years); the no-reform counterfactual is computed once at load. Slider input is debounced.
-- **State sharing:** policy package, reform year, phase-in and seed serialized (diff-from-default → base64) into the URL hash; "Copy share link" button. Decoding validates the type of every field and falls back to the default for anything malformed. No backend ever.
+- **Frontend:** vanilla TypeScript + DOM, **hand-rolled SVG charts** (line with optional range bands, stacked-area, dollar stacked-area, Iron Triangle radar, single or overlaid) — no React, no charting library. Policy panel (left, sticky: scenario menu, timing controls, levers) ⇄ live dashboard (6 tiles; 12 charts, see §5) ⇄ "Why?" panel. Simulations run in a small pool of **Web Workers** (`src/web/worker.ts`, `runs.ts`), five runs per package, with the no-reform runs computed once per seed; if workers are unavailable the page falls back to the main thread. Modules: `app.ts` (simulator view), `compare.ts` (comparison view), `challenge.ts`, `metrics.ts` (the headline measures, shared by tiles, challenges and the comparison table), `charts.ts`, `levers.ts` (lever specs and link encoding).
+- **State sharing:** policy package, reform year, phase-in, seed and any challenge serialized (diff-from-default → UTF-8 → base64) into the URL hash; a comparison is `#cmp.` plus a list of names and package links. Decoding validates the type of every field and falls back to the default for anything malformed. No backend ever.
 - **Run it:** `npm run build` then `npm run serve` (a ~30-line zero-dep Node static server at `scripts/serve.ts`) → http://localhost:5173/. Or `npm run dev` (build + serve).
 - **Hosting:** static site — `web/` is the deployable root (GitHub Pages / Netlify / a USB stick / the LMS).
-- **Testing:** the validation scenarios in §8 run as automated regression tests — the model's qualitative behavior is pinned (68 tests). The older scenario tests (1–9) still run a single seed (42); the reform, supply, merger and wage tests check three to five seeds. Multi-seed tests against a calibration-target table are planned (§9).
+- **Testing:** 89 automated tests. Every scenario in §8 runs on three seeds (five for the merger and wage tests, eight for calibration), so no threshold is fitted to one draw; the calibration targets are enforced as bands on multi-seed means; the dashboard's plain logic (links, challenges, the comparison list, summaries across runs) is unit-tested; rendering is checked in a browser.
 - **Version control:** the folder is a git repository (`web/dist/` and logs ignored).
 
 ---
 
 ## 8. Calibration & validation targets (stylized)
 
-Baseline targets (~2024 US): coverage ≈ 92%; NHE ≈ 17.5% of GDP; individual-market premium ≈ $7k/yr single. What the model produces (20 seeds, year 10): coverage 92–94%; ESI ≈ 67% and public coverage ≈ 15% of the modeled nonelderly-adult population (see Phase 3 below); **NHE between 15.2% and 17.9% of GDP depending on the seed (mean 16.1%)**, so the spending target is met only loosely and needs recalibration.
+Calibration targets (`src/engine/calibration.ts`; enforced by `tests/calibration.test.ts`). Each is the average of the first five years of a current-law run, over several seeds. References are round figures for the US around 2023, for adults where available, since the model simulates ages 26–64.
+
+| Target | Reference | Band | Model (20 seeds) | Status |
+|---|---|---|---|---|
+| Insured | 90% | 88–93% | 92.6% | met |
+| Employer coverage | 65% | 60–70% | 69.4% | met (high end) |
+| Public coverage (Medicaid-style) | 15% | 12–19% | 12.5% | met (low end) |
+| Individual market | 9% | 6–12% | 10.7% | met |
+| Workers offered employer coverage | 80% | 72–88% | 82.0% | met |
+| Uninsured rate, low-income third ÷ high-income third | 4× | 2.5–9× | 4.2× (about 11% vs 3%) | met |
+| Health spending, share of GDP | 17.6% | 16.7–18.3% | 17.5% | met by construction (display scale) |
+| Individual-market silver premium | $7,000 | $6,000–8,500 | $7,770 | met |
+| Employer premium, single coverage | $8,700 | $7,800–9,600 | $6,600 | **known miss** |
+| ESI tax exclusion, national | $320B | $250–420B | $418B | met (top of band) |
+| Hospital utilization | 85% | 80–90% | 85% | met by construction |
+
+What the table changed when it was first run (November 2026):
+- **The income gradient in uninsurance was backwards.** Low-income households were *less* likely to be uninsured than high-income ones (ratio 0.66; 5% against 8%), because public coverage and subsidies were free of friction and nothing made coverage worth more to those with more to lose. Two mechanisms were added (§3.1): an enrollment hassle that falls with income, and a cost of being uninsured that rises with income. The gradient is now about 11% / 9% / 3% for the low / middle / high thirds.
+- **Health spending** is brought to 17.5% of GDP at the start of a run by the display scale (`nheDisplayScale` 1.95). This is a calibration constant, not a demographic estimate. Spending then drifts up to about 18–19% by year 19 under current law, as slow provider consolidation raises prices.
+- **Employer premiums are about a quarter too low**, because the model's medical costs per adult are about 75% of the real figure. This is recorded as a known miss, not tuned away: fixing it means raising `baseAnnualCost` and re-tuning coverage, after which the display scale could fall toward its demographic value.
+
+Stylized baseline in other respects: individual-market premium ≈ $7k/yr single; see the Phase notes below.
 
 Notable Phase-1 calibration decisions (all in `src/engine/params.ts`):
 - Expected cost includes a flat **accident-risk component** independent of health status — without it, the healthiest fifth of the population rationally declines even near-free coverage and baseline uninsurance triples.
@@ -178,12 +201,12 @@ Notable Phase-1 calibration decisions (all in `src/engine/params.ts`):
 - Risk aversion is deliberately high relative to textbook expected-utility values — it stands in for loss aversion and default-following in real take-up behavior.
 - Baseline subsidies use the **ARPA schedule** (0% of income below 1.5×FPL ramping to 8.5%, no income cliff); students can re-impose the 4×FPL cliff and watch middle-income coverage drop.
 - **Risk adjustment** across tiers is a policy lever; without it, tier-level selection makes the market sawtooth even with subsidies.
-- The sim models nonelderly adults; displayed NHE/GDP is extrapolated to the full population (×1.75, documented) so the headline matches the familiar ~17.5%.
+- The sim models nonelderly adults; the displayed NHE/GDP is scaled (×1.95, a calibration constant) so that a current-law run starts at the familiar ~17.5%.
 
 Notable Phase-2 (provider market) calibration decisions:
 - Care quantity (from the Phase-1 demand machinery) is now priced: each sector posts a **commercial price index** = (HHI/HHI₀)^0.7 × (utilization/target)^0.5 ÷ insurer leverage, capped by any all-payer rate setting. Public payers get an administered price (default 0.6× commercial). Provider **marginal cost is 0.85**, so public coverage and uncompensated (uninsured) care drag provider margins — high uninsurance squeezes providers, a realistic linkage.
-- **Mergers** are proposed for the revenue they would bring (§3.3); antitrust stringency is the probability a proposal is blocked. Under current law (stringency 0.8) a run sees 0 to 4 approved mergers in 20 years (mean about 2), and the average hospital commercial price index drifts up to about 1.13 by year 19: slow, creeping consolidation.
-- **Entry is the counter-force, but a weak one**: margins above 16% draw new firms after the sector's lag. Because each further merger is worth more in a concentrated market, lax antitrust (0.3) now produces sustained consolidation, not the overshoot-and-revert of earlier versions: on average the hospital HHI reaches about 2,800 and the commercial price index about 1.44 by year 19, against about 2,000 and 1.13 under current law.
+- **Mergers** are proposed for the revenue they would bring (§3.3); antitrust stringency is the probability a proposal is blocked. Under current law (stringency 0.8) a run sees 0 to 4 approved mergers in 20 years (mean about 2), and the average hospital commercial price index drifts up to about 1.15 by year 19: slow, creeping consolidation.
+- **Entry is the counter-force, but a weak one**: margins above 16% draw new firms after the sector's lag. Because each further merger is worth more in a concentrated market, lax antitrust (0.3) now produces sustained consolidation, not the overshoot-and-revert of earlier versions: on average the hospital HHI reaches about 2,800 and the commercial price index about 1.45 by year 19, against about 2,000 and 1.15 under current law.
 - **Queues**: utilization >1 rations delivery to capacity; waits rise convexly (≈ base·ρ²/(1.4−ρ)) and erode access/health. This is why single-payer-at-low-rates and below-cost price caps produce *coverage without access* — everyone insured, no one seen.
 - Capacity floor is 55% of baseline (providers are partly fixed assets); below-cost payment can't make the system vanish, only ration severely.
 
@@ -199,12 +222,12 @@ Notable Phase-3 (employer market) calibration decisions:
 - ESI offer/take-up split keeps the **employee share** (~$1.9k per enrollee after tax) as the salient take-up cost, while the employer's share comes out of cash wages (~$3.3k per worker at an offering firm) — the "ESI isn't free" lesson without suppressing take-up.
 - The extensive margin is driven by a **recruitment value** (`esiRecruitmentValue = 0.42 × claims`) set above every firm's admin load, so ESI carries positive non-tax value for all sizes → most firms offer regardless of the subsidy. A **per-worker fixed offering cost** (small $2.3k / medium $0.4k / large $0.06k) is what keeps the smallest firms out, plus an idiosyncratic firm shock (σ≈$1.3k) to smooth the margin. *This replaced an earlier formulation whose break-even relied entirely on the tax subsidy for all but the largest firms, so repeal implausibly collapsed ESI to ~19% (see §3.2 history).*
 - A **very-low-income tax bracket** (4% under $28k) gives low-wage workers a small subsidy, reinforcing the size/wage offer gradient.
-- Baseline lands at ESI ≈ 67%, offer rate ≈ 82% (small ~47%, medium ~91%, large ~99%), avg AV ≈ gold, public ≈ 15%, insured ≈ 93% — a stylized nonelderly-adult US. (Wage pass-through lowered the offer rate from 88%, because firms cannot shift premiums onto workers near the wage floor, and raised public coverage from 12%, because eligibility is judged on cash wages.)
+- Baseline lands at ESI ≈ 69%, offer rate ≈ 82% (small ~47%, medium ~91%, large ~99%), avg AV ≈ gold, public ≈ 12.5%, individual ≈ 11%, insured ≈ 93% — a stylized US for adults 26–64 (see the calibration table above).
 
 Employer-market validation scenarios (Phase 3, passing as of June 13):
-7. ✅ **Tax-exclusion repeal:** ESI shrinks *modestly* (~66% → ~55%) and at the **extensive margin** — small-firm offers fall (47%→16%) while medium (91%→79%) and large (99%→93%) firms mostly keep offering (recruitment value); generosity barely moves (avg AV 82→80). Displaced workers shift to the individual market; tax expenditure → 0. ESI remains the largest source. (See §3.2 "known limitation" on why the intensive/generosity response is small.)
-8. ✅ **Tax-exclusion cap ($5k, Cadillac-style):** coverage and offers nearly stable (ESI 66%→63%), generosity trimmed (avg AV 82→80), tax expenditure cut ~31% — the targeted "trim generous plans, raise revenue" result.
-9. ✅ **Employer mandate:** offer rate → 100%; ESI rises (66%→72%) and overall coverage is broadly stable (the affordability exemption protects low-wage workers' subsidies); more low-wage workers end up on public coverage, because the wage offset lowers their cash income.
+7. ✅ **Tax-exclusion repeal:** ESI shrinks *modestly* (~69% → ~58%) and at the **extensive margin** — small-firm offers fall (47%→16%) while medium (91%→79%) and large (99%→93%) firms mostly keep offering (recruitment value); generosity barely moves (avg AV 82→80). Displaced workers shift to the individual market; tax expenditure → 0. ESI remains the largest source. (See §3.2 "known limitation" on why the intensive/generosity response is small.)
+8. ✅ **Tax-exclusion cap ($5k, Cadillac-style):** coverage and offers nearly stable (ESI 69%→66%), generosity trimmed (avg AV 82→80), tax expenditure cut ~30% — the targeted "trim generous plans, raise revenue" result.
+9. ✅ **Employer mandate:** offer rate → 100%; ESI rises (69%→75%) and overall coverage is broadly stable (the affordability exemption protects low-wage workers' subsidies); somewhat more low-wage workers end up on public coverage, because the wage offset lowers their cash income.
 
 Government direct-provision scenarios (VA/NHS; stylized & out-of-sample for the US; tested in reform mode, reform in year 5):
 10. ✅ **Safety-net clinics:** uninsured/Medicaid gain access via public delivery → the care gap roughly halves (≈ 5% → ≈ 2%), uncompensated care falls, health rises, private waits ease — at a budget cost; insurance status unchanged.
@@ -214,11 +237,11 @@ Government direct-provision scenarios (VA/NHS; stylized & out-of-sample for the 
 Why the capacity levels changed: care that is free at the point of use raises demand, so capacity equal to *today's* demand (1.0×) is over-subscribed once everyone is covered. The presets were 1.15× and 0.75× when the policy applied from year 0; with a burn-in, 1.15× ran at 105% utilization, so "well funded" is now 1.35× and "underfunded" 0.95×.
 
 Reform-transition scenario (new in v0.7):
-13. ✅ **Reforms land on an existing system.** Years before the reform are identical to the no-reform run. Single payer at adequate rates pushes hospital utilization from about 0.84 to 0.99 and waits from about 2 to 4 weeks in the reform year (checked on seeds 1, 7 and 42). With a phase-in, dials move gradually and switches flip at completion; a phased mandate raises coverage step by step. Every output is finite for every preset in both modes.
+13. ✅ **Reforms land on an existing system.** Years before the reform are identical to the no-reform run. Single payer at adequate rates pushes hospital utilization from about 0.84 to 0.97 and waits from about 2 to 4 weeks in the reform year. With a phase-in, dials move gradually and switches flip at completion; a phased mandate raises coverage step by step. Every output is finite for every preset in both modes.
 
 Supply, merger and wage scenarios (new in v0.8; reform mode with the reform in year 5, three to five seeds each):
-14. ✅ **Queues clear where supply can respond.** Under current law utilization stays near the 85% target. After single payer at adequate rates, hospital utilization returns from 0.99 to about 0.87 within five years; physician utilization is still 0.97 five years on and reaches 0.85 only around year 19 (training lag plus the residency-slot ceiling).
-15. ✅ **The supply levers bind.** Residency slots at 2.0× bring physician utilization to 0.87 by year 15 (0.93 at 1.0×), with no effect before the 7-year lag. A full Certificate of Need freeze holds hospital utilization near 0.97 indefinitely. Cutting residency slots to 0.5× under current law shrinks the physician workforce from year 12 on. Paying below cost stops investment and the queue never clears.
+14. ✅ **Queues clear where supply can respond.** Under current law utilization stays near the 85% target. After single payer at adequate rates, hospital utilization returns from 0.97 to about 0.87 within five years; physician utilization is still 0.98 five years on and comes down to about 0.89 only by year 19 (training lag plus the residency-slot ceiling).
+15. ✅ **The supply levers bind.** Residency slots at 2.0× bring physician utilization to 0.85 by year 15 (0.91 at 1.0×), with no effect before the 7-year lag. A full Certificate of Need freeze holds hospital utilization near 1.0 indefinitely. Cutting residency slots to 0.5× under current law shrinks the physician workforce from year 12 on. Paying below cost stops investment and the queue never clears.
 16. ✅ **Mergers follow the money.** The merger gain is larger in more concentrated markets and zero under administered or capped prices; no merger is proposed under single payer or a binding cap, whatever the antitrust setting; lax antitrust yields more mergers and higher prices; the antitrust lever changes nothing in a market with no mergers.
 17. ✅ **Wage pass-through.** Workers at offering firms are paid less in cash by the firm's expected contribution, never below the wage floor; the offset disappears under single payer; when consolidation raises prices and premiums, take-home pay falls.
 
@@ -234,11 +257,13 @@ Supply, merger and wage scenarios (new in v0.8; reform mode with the reform in y
 | 4. Frontend | ✅ **DONE (June 13)** — no-build static app: policy panel (all levers + scenario presets), live dashboard (tiles + hand-rolled SVG charts), Iron Triangle radar, "Why?" drill-down, shareable-URL state. Verified rendering + interactivity in-browser. | mid August |
 | 4a. Review fixes | ✅ **DONE (Nov 15)** — reform timeline with burn-in and phase-in; care gap; dormant sectors, prices paid, national-scale narrative dollars and other honest readings; git, README; 52 tests | — |
 | 4b. Supply, mergers, wages | ✅ **DONE (Nov 15)** — demand-following supply behind the Certificate of Need and residency-slot gates; profit-driven mergers on their own random stream; wage pass-through of employer premiums; capacity chart and wage line on the dashboard; 68 tests | — |
-| 4c. Noise | Separate RNG streams per module; run several seeds and show a range on tiles and charts | next |
-| 4d. Calibration | Multi-seed tests against a calibration-target table; recalibrate health spending to ~17.5% of GDP | next |
-| 4e. Explanations | Link each chart to its explanation chain | next |
-| 5. Classroom modes | challenges (assignment links with success criteria), comparison view | after 4b–4e |
-| 6. Playtesting | instructor + TA shakedown; parameter tuning; student-facing copy | before classroom use |
+| 4c. Noise | ✅ **DONE (Nov 15)** — per-household random draws (common random numbers across policies); five runs per package in background workers; ranges on tiles and charts | — |
+| 4d. Calibration | ✅ **DONE (Nov 15)** — calibration-target table enforced on multi-seed means; health spending rescaled to start at 17.5%; take-up recalibrated so uninsurance falls with income; every scenario test on three or more seeds | — |
+| 4e. Explanations | ✅ **DONE (Nov 15)** — a "Why?" on each chart: mechanism, summary of the move, and the events behind it across all years | — |
+| 5. Classroom modes | ✅ **DONE (Nov 15)** — challenges (targets carried in the share link, judged on the mean of five runs) and the comparison view (up to 12 packages; overlaid Iron Triangle, table, paths over time) | — |
+| 6. Playtesting | instructor + TA shakedown with real assignments; student-facing wording; parameter tuning | before classroom use |
+| 7. Cost recalibration | raise medical costs per adult to the real level (fixes the employer-premium miss), re-tune coverage, lower the display scale | open |
+| 8. Who pays | allocate taxes to households so take-home pay and total burden are comparable across systems; a burden-by-income chart | open |
 
 ---
 

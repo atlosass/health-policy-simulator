@@ -47,6 +47,8 @@
       .tlabel { font-size: 12px; color: var(--ink); margin-top: 2px; }
       .tsub { font-size: 11px; color: var(--muted); margin-top: 2px; }
       .tile.good .tsub { color: var(--good); } .tile.bad .tsub { color: var(--bad); }
+      .trange { font-size: 10.5px; color: var(--muted); margin-top: 2px; min-height: 14px; }
+      .runstatus { margin: -6px 0 12px; color: var(--muted); font-size: 12px; }
 
       /* Charts grid */
       .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
@@ -64,7 +66,10 @@
       .yearbar button:hover { border-color: var(--accent); color: var(--accent); }
       .yearbar input[type="range"] { flex: 1; max-width: 420px; }
       .yearbar .yearlabel { font-weight: 700; font-size: 12.5px; }
-      .cell { display: flex; min-width: 0; }
+      .cell { display: flex; min-width: 0; position: relative; }
+      /* "Why?" on each chart opens the explanation for that chart. */
+      .whybtn { position: absolute; top: 8px; right: 10px; font: inherit; font-size: 11px; padding: 2px 8px; border: 1px solid var(--line); background: #fff; border-radius: 999px; color: var(--muted); cursor: pointer; }
+      .whybtn:hover { border-color: var(--accent); color: var(--accent); }
       .refline { stroke: #94a3b8; stroke-dasharray: 3 3; }
       .reflabel { fill: var(--muted); font-size: 9px; text-anchor: end; }
       /* Reform marker: where the reform begins, plus a band over any phase-in */
@@ -85,6 +90,60 @@
       .tag { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 1px 6px; border-radius: 999px; margin-right: 8px; color: #fff; }
       .tag-insurer { background: #16a34a; } .tag-coverage { background: #2563eb; } .tag-government { background: #9333ea; }
       .tag-market { background: #dc2626; } .tag-provider { background: #ea580c; } .tag-employer { background: #0891b2; } .tag-policy { background: var(--ink); }
+
+      .drillhead button, .yearlink { font: inherit; font-size: 12px; padding: 3px 9px; border: 1px solid var(--line); background: #fff; border-radius: 8px; cursor: pointer; }
+      .drillhead button:hover, .yearlink:hover { border-color: var(--accent); color: var(--accent); }
+      .yearlink { margin-right: 8px; font-variant-numeric: tabular-nums; }
+      #eventlist li.current { border-color: var(--accent); }
+      .mechanism { margin: 4px 2px 8px; font-size: 13px; }
+      .drillnote { margin: 8px 2px 0; font-size: 11.5px; color: var(--muted); }
+
+      /* Buttons and form controls shared by the challenge editor and the comparison view. */
+      .editoractions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+      .editoractions .spacer { flex: 1; }
+      .editoractions button, .cmpOpen { font: inherit; padding: 6px 11px; border: 1px solid var(--line); background: #fff; border-radius: 8px; cursor: pointer; }
+      .editoractions button:hover, .cmpOpen:hover { border-color: var(--accent); color: var(--accent); }
+      .editoractions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .editoractions button.primary:hover { color: #fff; filter: brightness(1.08); }
+      .note { color: var(--muted); font-size: 13px; margin: 6px 0; }
+      .note code { background: #f1f5f9; padding: 1px 4px; border-radius: 4px; }
+
+      /* Challenge */
+      .challenge { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; }
+      .challenge.passed { border-left-color: var(--good); }
+      .chead { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+      .ctitle { font-weight: 700; } .cstatus { font-size: 13px; color: var(--muted); }
+      .challenge.passed .cstatus { color: var(--good); font-weight: 700; }
+      .criteria { list-style: none; margin: 8px 0 4px; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 4px 16px; font-size: 13px; }
+      .criteria .mark { display: inline-block; width: 18px; font-weight: 700; }
+      .criteria li.met .mark { color: var(--good); } .criteria li.unmet .mark { color: var(--bad); }
+      .criteria .now { color: var(--muted); }
+      .cnote { margin: 4px 0 0; font-size: 11.5px; color: var(--muted); }
+      .editor { margin-bottom: 12px; }
+      .field { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; }
+      .field input { flex: 1; max-width: 520px; }
+      .field input, .chrow select, .chrow input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+      .chrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
+      .chrow .chValue { width: 96px; } .chUnit { color: var(--muted); font-size: 12px; min-width: 120px; }
+      .chDel { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 8px; width: 28px; height: 28px; cursor: pointer; }
+      .chDel:hover { border-color: var(--bad); color: var(--bad); }
+
+      /* Comparison view */
+      .compareinput { margin-bottom: 14px; }
+      .compareinput textarea { width: 100%; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 8px; border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+      .errors { color: var(--bad); font-size: 13px; margin-top: 6px; }
+      .tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; }
+      .cmptable { border-collapse: collapse; width: 100%; font-size: 13px; }
+      .cmptable th, .cmptable td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; font-variant-numeric: tabular-nums; }
+      .cmptable th { font-size: 12px; color: var(--muted); font-weight: 700; cursor: help; }
+      .cmptable th:first-child, .cmptable td.pname { text-align: left; }
+      .cmptable td.pname { font-weight: 600; cursor: help; }
+      .cmptable td.best { background: #ecfdf5; font-weight: 700; }
+      .cmptable td.pass { color: var(--good); font-weight: 700; } .cmptable td.fail { color: var(--bad); font-weight: 700; }
+      .cmptable tr.baserow td { color: var(--muted); border-bottom: 0; }
+      .cmptable .warn { display: block; font-size: 10.5px; font-weight: 400; color: #b45309; }
+      .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; }
+      .swatch.dashed { background: none; border-top: 2px dashed #334155; height: 0; border-radius: 0; vertical-align: 4px; }
 
       .flash { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 13px; }
     </style>

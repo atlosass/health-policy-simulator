@@ -29,3 +29,11 @@ export const COVERAGE_LABELS = {
 export function clamp(x: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, x));
 }
+
+/** Escape text for use inside HTML (element content or a quoted attribute). */
+export function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/** Colors for packages shown side by side. */
+export const PACKAGE_COLORS = ["#e11d48", "#2563eb", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#be185d", "#4d7c0f", "#b45309", "#1e40af", "#0f766e", "#6d28d9"] as const;

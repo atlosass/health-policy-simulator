@@ -22,6 +22,9 @@ export interface GapSeries {
   label: string;
   color: string;
   values: (number | null)[];
+  /** Optional range around the line (lowest and highest run); drawn as a shaded band. */
+  lo?: (number | null)[];
+  hi?: (number | null)[];
   /** Draw as a thinner dashed line (used for the no-reform comparison). */
   dashed?: boolean;
   /** Leave this series out of the legend. */
@@ -79,7 +82,9 @@ function markerSvg(xOf: (i: number) => number, years: number, marker?: ReformMar
 /** Multi-line time series over years (x = year index). Null values break the line. */
 export function lineChart(opts: AxisChartOpts): string {
   const years = opts.series[0]?.values.length ?? 0;
-  const allVals = opts.series.flatMap((s) => s.values).filter((v): v is number => v !== null);
+  const allVals = opts.series
+    .flatMap((s) => [...s.values, ...(s.lo ?? []), ...(s.hi ?? [])])
+    .filter((v): v is number => v !== null);
   const yMax = opts.yMax ?? Math.max(0.0001, ...allVals) * 1.1;
   const yMin = opts.yMin ?? Math.min(0, ...allVals);
   const xOf = (i: number) => M.left + (years <= 1 ? 0 : (plotW * i) / (years - 1));
@@ -96,6 +101,32 @@ export function lineChart(opts: AxisChartOpts): string {
   const xlabels = [0, Math.floor((years - 1) / 2), years - 1]
     .filter((v, i, a) => a.indexOf(v) === i && v >= 0)
     .map((i) => `<text x="${xOf(i).toFixed(1)}" y="${H - 8}" class="xtick">Yr ${i}</text>`)
+    .join("");
+
+  // Shaded range for each series that has one: up along the high edge, back along the low edge.
+  const bands = opts.series
+    .map((s) => {
+      if (!s.lo || !s.hi) return "";
+      let out = "";
+      let start = -1;
+      const flush = (end: number) => {
+        if (start < 0 || end - start < 1) return;
+        let d = "";
+        for (let i = start; i <= end; i++) d += `${i === start ? "M" : "L"}${xOf(i).toFixed(1)},${yOf(s.hi![i]!).toFixed(1)} `;
+        for (let i = end; i >= start; i--) d += `L${xOf(i).toFixed(1)},${yOf(s.lo![i]!).toFixed(1)} `;
+        out += `<path d="${d}Z" fill="${s.color}" fill-opacity="0.16" stroke="none" class="runband"/>`;
+      };
+      for (let i = 0; i < years; i++) {
+        const present = s.lo[i] != null && s.hi[i] != null;
+        if (present && start < 0) start = i;
+        if (!present && start >= 0) {
+          flush(i - 1);
+          start = -1;
+        }
+      }
+      flush(years - 1);
+      return out;
+    })
     .join("");
 
   const lines = opts.series
@@ -139,7 +170,7 @@ export function lineChart(opts: AxisChartOpts): string {
       ? `<line x1="${xOf(opts.cursor).toFixed(1)}" y1="${M.top}" x2="${xOf(opts.cursor).toFixed(1)}" y2="${M.top + plotH}" class="cursorline"/>`
       : "";
 
-  return svg(opts.title, grid + ref + markerSvg(xOf, years, opts.marker) + cursor + lines + xlabels + legend);
+  return svg(opts.title, grid + ref + markerSvg(xOf, years, opts.marker) + cursor + bands + lines + xlabels + legend);
 }
 
 /** Stacked area (e.g., coverage mix over time). Series stack bottom-to-top. */
@@ -287,4 +318,48 @@ function svg(title: string, inner: string): string {
     `<svg viewBox="0 0 ${W} ${H}" class="chart" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(title)}">` +
     `<text x="${M.left}" y="${14}" class="charttitle">${esc(title)}</text>${inner}</svg>`
   );
+}
+
+/** Iron Triangle with several packages overlaid (outlines only), against a dashed reference. */
+export function ironTriangleMulti(
+  title: string,
+  items: { color: string; score: { cost: number; quality: number; access: number } }[],
+  reference: { cost: number; quality: number; access: number } | null,
+): string {
+  const cx = W / 2;
+  const cy = H / 2 + 10;
+  const R = 96;
+  const axes = [
+    { key: "quality", label: "Quality", angle: -Math.PI / 2 },
+    { key: "access", label: "Access", angle: -Math.PI / 2 + (2 * Math.PI) / 3 },
+    { key: "cost", label: "Affordability", angle: -Math.PI / 2 + (4 * Math.PI) / 3 },
+  ] as const;
+  const pt = (angle: number, r: number): string => `${(cx + r * Math.cos(angle)).toFixed(1)},${(cy + r * Math.sin(angle)).toFixed(1)}`;
+  const shape = (d: { cost: number; quality: number; access: number }): string =>
+    axes.map((a) => pt(a.angle, R * clamp(d[a.key], 0, 1))).join(" ");
+  const rings = [0.25, 0.5, 0.75, 1]
+    .map((f) => `<polygon points="${axes.map((a) => pt(a.angle, R * f)).join(" ")}" class="grid" fill="none"/>`)
+    .join("");
+  const spokes = axes
+    .map((a) => {
+      const [x, y] = pt(a.angle, R).split(",");
+      return `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" class="grid"/>`;
+    })
+    .join("");
+  const labels = axes
+    .map((a) => {
+      const [x, y] = pt(a.angle, R + 18).split(",");
+      return `<text x="${x}" y="${(Number(y) + 3).toFixed(1)}" class="axislabel" text-anchor="middle">${a.label}</text>`;
+    })
+    .join("");
+  const ref = reference
+    ? `<polygon points="${shape(reference)}" fill="none" stroke="#334155" stroke-width="2" stroke-dasharray="4 3" stroke-linejoin="round"/>`
+    : "";
+  const polys = items
+    .map((it) => `<polygon points="${shape(it.score)}" fill="${it.color}" fill-opacity="0.06" stroke="${it.color}" stroke-width="2.2" stroke-linejoin="round"/>`)
+    .join("");
+  const legend = reference
+    ? `<g transform="translate(8,${H - 14})"><line x1="0" y1="-4" x2="14" y2="-4" stroke="#334155" stroke-width="2" stroke-dasharray="4 3"/><text x="19" class="legend">No reform</text></g>`
+    : "";
+  return svg(title, rings + spokes + labels + ref + polys + legend);
 }

@@ -2,6 +2,7 @@
 import { BASELINE_POLICY } from "../engine/index.ts";
 import type { Policy } from "../engine/index.ts";
 import { dollars } from "./format.ts";
+import { packChallenge, sanitizeChallenge, type Challenge } from "./challenge.ts";
 
 export type Lever =
   | { kind: "toggle"; key: keyof Policy; group: string; label: string; help: string }
@@ -77,6 +78,19 @@ export interface ShareState {
   policy: Policy;
   reformYear: number;
   phaseInYears: number;
+  /** An assignment travelling with the package, if any. */
+  challenge: Challenge | null;
+}
+
+/** Base64 of UTF-8 text, without padding (titles and names may hold any characters). */
+export function toBase64(text: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/=+$/, "");
+}
+
+export function fromBase64(b64: string): string {
+  return new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
 }
 
 export function encodeState(state: ShareState): string {
@@ -86,7 +100,8 @@ export function encodeState(state: ShareState): string {
   }
   if (state.reformYear !== TIMING.defaultReformYear) diff.reformYear = state.reformYear;
   if (state.phaseInYears !== 0) diff.phaseInYears = state.phaseInYears;
-  return btoa(JSON.stringify(diff)).replace(/=+$/, "");
+  if (state.challenge) diff.ch = packChallenge(state.challenge);
+  return toBase64(JSON.stringify(diff));
 }
 
 const NULLABLE: ReadonlySet<keyof Policy> = new Set(["priceCapIndex", "taxExclusionCap"]);
@@ -94,7 +109,7 @@ const NULLABLE: ReadonlySet<keyof Policy> = new Set(["priceCapIndex", "taxExclus
 /** Decode a share link. Anything malformed or of the wrong type falls back to the default. */
 export function decodeState(hash: string): ShareState | null {
   try {
-    const obj = JSON.parse(atob(hash)) as Record<string, unknown>;
+    const obj = JSON.parse(fromBase64(hash)) as Record<string, unknown>;
     const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
     const int = (v: unknown, lo: number, hi: number, fallback: number) =>
       finite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : fallback;
@@ -114,6 +129,7 @@ export function decodeState(hash: string): ShareState | null {
       policy: policy as unknown as Policy,
       reformYear: int(obj.reformYear, TIMING.minReformYear, TIMING.maxReformYear, TIMING.defaultReformYear),
       phaseInYears: int(obj.phaseInYears, 0, TIMING.maxPhaseIn, 0),
+      challenge: sanitizeChallenge(obj.ch),
     };
   } catch {
     return null;

@@ -1,5 +1,4 @@
 import {
-  runSimulation,
   describeChanges,
   PARAMS,
   BASELINE_POLICY,
@@ -15,20 +14,16 @@ import {
   TAX_EXCLUSION_REPEALED,
   SAFETY_NET_CLINICS,
 } from "../engine/index.ts";
-import type { Policy, SimConfig, SimResult, YearResult } from "../engine/index.ts";
-import { LEVERS, LEVER_GROUPS, TIMING, encodeState, decodeState, type Lever } from "./levers.ts";
-import {
-  lineChart,
-  stackedArea,
-  stackedAreaDollars,
-  ironTriangle,
-  type Series,
-  type ReformMarker,
-} from "./charts.ts";
-import { pct1, dollars, clamp, COVERAGE_COLORS, COVERAGE_LABELS } from "./format.ts";
+import type { ExplanationEvent, Policy, SimResult, YearResult } from "../engine/index.ts";
+import { LEVERS, LEVER_GROUPS, TIMING, encodeState, decodeState, type Lever, type ShareState } from "./levers.ts";
+import { lineChart, stackedArea, stackedAreaDollars, ironTriangle, type GapSeries, type Series, type ReformMarker } from "./charts.ts";
+import { dollars, clamp, esc, COVERAGE_COLORS, COVERAGE_LABELS } from "./format.ts";
+import { RunPool, band, meanSeries, statAt, pairedDelta } from "./runs.ts";
+import { TILE_METRICS, METRIC_BY_KEY, type Metric } from "./metrics.ts";
+import { challengeBanner, challengeEditor, criterionRow, readEditor, MAX_CRITERIA, type Challenge } from "./challenge.ts";
+import { mountCompare, decodeCompare } from "./compare.ts";
+import { POP, YEARS, RUNS, configFor, seedsFor, triangleScore, meanTriangle } from "./shared.ts";
 
-const POP = 8000;
-const YEARS = TIMING.years;
 /** Sample dollars → national dollars (same scaling the engine uses in its narrative text). */
 const NATIONAL = PARAMS.displayPopulation / POP;
 
@@ -47,13 +42,11 @@ const PRESETS: { label: string; policy: Policy }[] = [
   { label: "Public delivery, underfunded (NHS)", policy: NHS_UNDERFUNDED },
 ];
 
-interface State {
-  seed: number;
-  /** The reform package. The run starts under current law and switches to this. */
-  policy: Policy;
-  reformYear: number;
-  phaseInYears: number;
+interface State extends ShareState {
   selectedYear: number;
+  /** The chart whose "Why?" is open, or null for the year-by-year view. */
+  explain: string | null;
+  editingChallenge: boolean;
 }
 
 const state: State = {
@@ -61,33 +54,112 @@ const state: State = {
   policy: { ...BASELINE_POLICY },
   reformYear: TIMING.defaultReformYear,
   phaseInYears: 0,
+  challenge: null,
   selectedYear: TIMING.defaultReformYear,
+  explain: null,
+  editingChallenge: false,
 };
 
-/** Current law for `reformYear` years, then the reform (optionally phased in). */
-const cfg = (policy: Policy): SimConfig => ({
+const shareState = (): ShareState => ({
   seed: state.seed,
-  populationSize: POP,
-  years: YEARS,
-  policy,
-  priorPolicy: BASELINE_POLICY,
+  policy: { ...state.policy },
   reformYear: state.reformYear,
   phaseInYears: state.phaseInYears,
+  challenge: state.challenge,
 });
 
-/** The same seed with no reform: the counterfactual every comparison is made against. */
-let baseline: SimResult;
-let result: SimResult;
+// ---------------- Runs ----------------
+// Every package is run RUNS times on consecutive seeds, in the background. The
+// no-reform runs use the same seeds, so each reform run has an exact twin.
+const pool = new RunPool(clamp((navigator.hardwareConcurrency || 4) - 1, 1, 4));
+let baseSeed: number | null = null;
+let baseRuns: (SimResult | undefined)[] = [];
+let reformRuns: (SimResult | undefined)[] = [];
+let generation = 0;
 
-// ---- Iron Triangle scoring: 0–1 per axis, 1 = good. ----
-function triangleScore(y: YearResult): { cost: number; quality: number; access: number } {
-  const burdenShare = y.spending.nheShareOfGdp * (1 + y.government.deadweightLoss / Math.max(1, y.spending.nhe));
-  return {
-    cost: clamp((0.32 - burdenShare) / (0.32 - 0.09), 0, 1),
-    quality: clamp((y.health.meanHealthStock - 0.5) / 0.45, 0, 1),
-    // 1 = everyone gets the care they need; 0 = a quarter or more of needed care goes undelivered.
-    access: clamp(1 - y.health.careGap / 0.25, 0, 1),
-  };
+function hasReform(): boolean {
+  return describeChanges(BASELINE_POLICY, state.policy).length > 0;
+}
+
+/** The runs ready to show: reform runs paired with their no-reform twins. Run 1 always leads. */
+function ready(): { runs: SimResult[]; base: SimResult[] } {
+  const runs: SimResult[] = [];
+  const base: SimResult[] = [];
+  const source = hasReform() ? reformRuns : baseRuns;
+  for (let i = 0; i < RUNS; i++) {
+    const r = source[i];
+    const b = baseRuns[i];
+    if (!r || !b) {
+      if (i === 0) break;
+      continue;
+    }
+    runs.push(r);
+    base.push(b);
+  }
+  return { runs, base };
+}
+
+function ensureBaseline(): void {
+  if (baseSeed === state.seed) return;
+  pool.cancel("base");
+  baseSeed = state.seed;
+  baseRuns = [];
+  const forSeed = state.seed;
+  seedsFor(state.seed).forEach((seed, i) => {
+    void pool.run(configFor(state, BASELINE_POLICY, seed), "base").then((res) => {
+      if (!res || forSeed !== baseSeed) return;
+      baseRuns[i] = res;
+      onRunArrived();
+    });
+  });
+}
+
+function rerun(): void {
+  const mine = ++generation;
+  pool.cancel("reform");
+  reformRuns = [];
+  history.replaceState(null, "", `#${encodeState(shareState())}`);
+  syncPreset();
+  document.body.classList.add("computing");
+  ensureBaseline();
+  if (!hasReform()) {
+    onRunArrived();
+    return;
+  }
+  seedsFor(state.seed).forEach((seed, i) => {
+    void pool.run(configFor(state, state.policy, seed), "reform").then((res) => {
+      if (!res || mine !== generation) return;
+      reformRuns[i] = res;
+      onRunArrived();
+    });
+  });
+}
+
+let debounceTimer: number | undefined;
+function rerunDebounced(): void {
+  window.clearTimeout(debounceTimer);
+  debounceTimer = window.setTimeout(rerun, 140);
+}
+
+let shownRuns = -1;
+/** Redraw when the first run lands (so there is something to look at) and again when all have. */
+function onRunArrived(): void {
+  if (view !== "simulator") return;
+  const n = ready().runs.length;
+  if (n === 0) return;
+  if (n === 1 || n === RUNS || shownRuns === -1) {
+    renderDashboard();
+  } else {
+    const status = document.getElementById("runstatus");
+    if (status) status.textContent = runStatus(n);
+  }
+  if (n === RUNS) document.body.classList.remove("computing");
+}
+
+function runStatus(n: number): string {
+  return n < RUNS
+    ? `Showing run 1 of ${RUNS}; the other runs are finishing in the background (${n} done).`
+    : `Every number is the average of ${RUNS} runs that differ only in luck (who falls ill, when providers merge). Shaded bands and “runs:” show the lowest and highest run.`;
 }
 
 // ---------------- Policy panel (built once, holds live inputs) ----------------
@@ -167,7 +239,7 @@ function buildTimingRow(o: {
   const row = document.createElement("div");
   row.className = "lever";
   row.innerHTML =
-    `<label for="tm_${o.id}" title="${o.help}">${o.label}</label>` +
+    `<label for="tm_${o.id}" title="${esc(o.help)}">${o.label}</label>` +
     `<div class="rangewrap"><input type="range" id="tm_${o.id}" min="${o.min}" max="${o.max}" step="1"><span class="val"></span></div>`;
   const rng = row.querySelector("input")!;
   const val = row.querySelector(".val")!;
@@ -187,7 +259,7 @@ function buildLever(lever: Lever): HTMLElement {
   const row = document.createElement("div");
   row.className = "lever";
   const id = `lv_${lever.key}`;
-  const title = `<label for="${id}" title="${lever.help}">${lever.label}</label>`;
+  const title = `<label for="${id}" title="${esc(lever.help)}">${lever.label}</label>`;
   const policy = () => state.policy as unknown as Record<string, unknown>;
 
   if (lever.kind === "toggle") {
@@ -254,45 +326,163 @@ function syncPreset(): void {
   presetSel.value = match >= 0 ? String(match) : "custom";
 }
 
+// ---------------- Per-chart explanations ----------------
+/**
+ * What moves each chart: the mechanism in a sentence or two, the kinds of
+ * events that drive it, and a lead series to summarize.
+ */
+interface Explain {
+  title: string;
+  mechanism: string;
+  types: string[];
+  lead?: { label: string; read: (y: YearResult, first: YearResult) => number | null; fmt: (v: number) => string };
+}
+
+const metricLead = (key: string): Explain["lead"] => {
+  const m = METRIC_BY_KEY.get(key)!;
+  return { label: m.label, read: (y) => m.read(y), fmt: m.fmt };
+};
+
+const EXPLAIN: Record<string, Explain> = {
+  coverage: {
+    title: "Coverage mix",
+    mechanism:
+      "Each year a household takes the option that costs it least for the risk it faces. Coverage moves when a rule changes what people are offered or what it costs them (eligibility, subsidies, a mandate), when premiums move, or when employers start or stop offering.",
+    types: ["reform-begins", "reform-complete", "uninsured-shift", "individual-market-collapse", "offer-shift"],
+    lead: metricLead("insured"),
+  },
+  spending: {
+    title: "Health spending",
+    mechanism:
+      "Spending is price times quantity, plus administration. It rises when more people are covered and use more care, or when provider consolidation lifts prices. It falls when prices are capped or set by the government, and also when shortages keep care from being delivered.",
+    types: ["reform-begins", "price-change", "merger-approved", "uninsured-shift", "provider-exit", "wait-times"],
+    lead: metricLead("nhe"),
+  },
+  waits: {
+    title: "Wait times",
+    mechanism:
+      "Waits depend on demand relative to capacity. Covering more people raises demand at once; capacity follows only after construction (3 years) or training (7 years), and only as far as Certificate of Need, residency slots and payment rates allow.",
+    types: ["reform-begins", "wait-times", "capacity-expansion", "supply-gate", "underinvestment", "provider-exit", "public-provision"],
+    lead: metricLead("longestWait"),
+  },
+  capacity: {
+    title: "Private provider capacity",
+    mechanism:
+      "Providers plan capacity for the demand they expect and replace what retires. New capacity takes 3 years to build (hospitals) or 7 to train (physicians). Certificate of Need and residency slots can block it, and providers will not invest at margins that do not justify it.",
+    types: ["reform-begins", "capacity-expansion", "supply-gate", "underinvestment", "provider-exit", "provider-entry"],
+    lead: {
+      label: "Hospital capacity (year 0 = 1.00)",
+      read: (y, first) => (y.providers.hospital.active ? y.providers.hospital.capacity / first.providers.hospital.capacity : null),
+      fmt: (v) => v.toFixed(2),
+    },
+  },
+  premiums: {
+    title: "Private premiums",
+    mechanism:
+      "Insurers set each year's premium from last year's claims. Premiums rise when the people buying are sicker (healthy people leaving the pool) or when provider prices rise. Employer premiums are paid partly by the worker and partly by the firm, which takes its share out of wages.",
+    types: ["reform-begins", "premium-change", "individual-market-collapse", "price-change", "wage-offset"],
+    lead: { label: "Individual silver premium", read: (y) => (y.policy.singlePayer ? null : y.premiums.silver), fmt: dollars },
+  },
+  prices: {
+    title: "Prices paid to private providers",
+    mechanism:
+      "Commercial prices rise with market concentration: providers merge when a merger would raise their revenue, and antitrust review decides whether it goes through. Public programs pay an administered rate, so the average price paid falls as more patients are publicly covered.",
+    types: ["reform-begins", "merger-approved", "merger-blocked", "price-change", "provider-entry"],
+    lead: {
+      label: "Hospital price paid (index)",
+      read: (y) => (y.providers.hospital.active ? y.providers.hospital.avgPricePaid : null),
+      fmt: (v) => v.toFixed(2),
+    },
+  },
+  uninsured: {
+    title: "Uninsured rate by income third",
+    mechanism:
+      "Low-income households qualify for public coverage and subsidies but face the most trouble enrolling; high-income households have more to lose by going without. The gaps between the lines move with eligibility rules, subsidies, mandates, and whether employers offer.",
+    types: ["reform-begins", "reform-complete", "uninsured-shift", "individual-market-collapse", "offer-shift"],
+    lead: metricLead("uninsuredLow"),
+  },
+  innovation: {
+    title: "Innovation index",
+    mechanism:
+      "New treatments are funded out of commercial revenue and provider margins, with a floor from public and spillover research. Squeezing prices or replacing commercial payers lowers R&D intensity, and the index then grows more slowly; the effect on health builds up over years.",
+    types: ["reform-begins", "innovation-shift"],
+    lead: metricLead("innovation"),
+  },
+  employer: {
+    title: "Employer market",
+    mechanism:
+      "A firm offers coverage when what workers gain from it, plus the tax break, exceeds the cost of running a plan; small firms are the ones on the margin. Generosity follows the tax break. What the firm pays toward premiums comes out of wages.",
+    types: ["reform-begins", "offer-shift", "wage-offset"],
+    lead: { label: "Share of workers offered coverage", read: (y) => y.employer.offerRate * 100, fmt: (v) => `${v.toFixed(0)}%` },
+  },
+  gov: {
+    title: "Government cost",
+    mechanism:
+      "The government pays for subsidies, public insurance, anything it delivers directly, and the tax revenue it gives up on employer premiums. Every dollar raised costs society about $1.30 once the drag of taxation is counted; that extra 30 cents is the deadweight loss.",
+    types: ["reform-begins", "fiscal-ledger"],
+    lead: metricLead("govCost"),
+  },
+};
+
+/** A chart with its "Why?" button. */
+function cell(key: string, chart: string): string {
+  return `<div class="cell">${chart}<button class="whybtn" data-why="${key}" title="What moved this chart, and why">Why?</button></div>`;
+}
+
 // ---------------- Dashboard ----------------
-function tile(label: string, value: string, sub: string, tone = "", help = ""): string {
-  const h = help ? ` title="${help}"` : "";
-  return `<div class="tile ${tone}"${h}><div class="tval">${value}</div><div class="tlabel">${label}</div><div class="tsub">${sub}</div></div>`;
+function tileHtml(m: Metric, runs: SimResult[], base: SimResult[], finalYear: number, reform: boolean): string {
+  const value = statAt(runs, finalYear, m.read);
+  let tone = "";
+  let sub = "— no reform";
+  let range = runs.length > 1 ? `runs: ${m.fmt(value.lo)} to ${m.fmt(value.hi)}` : "";
+  if (reform) {
+    const d = pairedDelta(runs, base, finalYear, m.read);
+    // A change that rounds to nothing is shown without a sign.
+    const signed = (x: number) => {
+      const size = m.fmtDelta(Math.abs(x));
+      return /[1-9]/.test(size) ? `${x >= 0 ? "+" : "−"}${size}` : size;
+    };
+    sub = `${signed(d.mean)} vs no reform`;
+    const clear = runs.length === 1 || d.sameSign;
+    if (Math.abs(d.mean) >= m.epsilon && clear) tone = d.mean > 0 === (m.better === "higher") ? "good" : "bad";
+    if (runs.length > 1) range = `runs: ${signed(d.lo)} to ${signed(d.hi)}${d.sameSign ? "" : " · could be luck"}`;
+  }
+  return (
+    `<div class="tile ${tone}" title="${esc(m.help)}"><div class="tval">${esc(m.fmt(value.mean))}</div>` +
+    `<div class="tlabel">${esc(m.label)}</div><div class="tsub">${esc(sub)}</div><div class="trange">${esc(range)}</div></div>`
+  );
 }
 
 function renderDashboard(): void {
-  const dash = document.getElementById("dash")!;
-  const ys = result.years;
-  const last = ys.at(-1)!;
-  const b = baseline.years.at(-1)!;
-  const finalYear = ys.length - 1;
+  const dash = document.getElementById("dash");
+  if (!dash) return;
+  const { runs, base } = ready();
+  if (runs.length === 0) {
+    dash.innerHTML = `<p class="timeline">Running the simulation…</p>`;
+    return;
+  }
+  shownRuns = runs.length;
+  const primary = runs[0]!;
+  const finalYear = primary.years.length - 1;
+  state.selectedYear = clamp(state.selectedYear, 0, finalYear);
+  const reform = hasReform();
+  const marker: ReformMarker | undefined = reform ? { start: state.reformYear, phaseIn: state.phaseInYears } : undefined;
+  const many = runs.length > 1;
 
-  const noReform = describeChanges(BASELINE_POLICY, state.policy).length === 0;
-  const marker: ReformMarker | undefined = noReform
-    ? undefined
-    : { start: state.reformYear, phaseIn: state.phaseInYears };
+  /** A line for the package: the mean across runs, with the range shaded once several runs are in. */
+  const line = (label: string, color: string, read: (y: YearResult) => number | null): GapSeries => {
+    const b = band(runs, read);
+    return many ? { label, color, values: b.mean, lo: b.lo, hi: b.hi } : { label, color, values: b.mean };
+  };
+  const baseLine = (read: (y: YearResult) => number | null): GapSeries => ({
+    label: "No reform",
+    color: "#94a3b8",
+    values: band(base, read).mean,
+  });
 
-  const deltaInsured = last.insuredRate - b.insuredRate;
-  const deltaNhe = last.spending.nheShareOfGdp - b.spending.nheShareOfGdp;
-  const deltaHealth = last.health.meanHealthStock - b.health.meanHealthStock;
-  const deltaGap = last.health.careGap - b.health.careGap;
-  const deltaInno = last.innovation.index - b.innovation.index;
-  const deltaCost = (last.government.totalSocialCost - b.government.totalSocialCost) * NATIONAL;
+  const tiles = TILE_METRICS.map((m) => tileHtml(m, runs, base, finalYear, reform)).join("");
 
-  const vsBase = (delta: number, unit: string, decimals: number): string =>
-    noReform ? "— no reform" : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toFixed(decimals)}${unit ? ` ${unit}` : ""} vs no reform`;
-  const costVsBase = noReform ? "— no reform" : `${deltaCost >= 0 ? "+" : "−"}${dollars(Math.abs(deltaCost))} vs no reform`;
-
-  const tiles = [
-    tile("Insured", pct1(last.insuredRate), vsBase(deltaInsured * 100, "pp", 1), toneFor(deltaInsured), "Share of households with any insurance (ESI, individual, or public). Note: with public direct provision, uninsured households can still get care."),
-    tile("Health spending", pct1(last.spending.nheShareOfGdp), vsBase(deltaNhe * 100, "pp of GDP", 1), toneFor(-deltaNhe), "National health expenditure as a share of GDP — total medical spending + insurer/admin load. Extrapolated from the nonelderly-adult sample to the whole population."),
-    tile("Population health", last.health.meanHealthStock.toFixed(3), vsBase(deltaHealth, "", 3), toneFor(deltaHealth), "Average 'health stock' across households (0.2–1.0). Each person's stock rises with adequate care and falls with age and with care they needed but did not get; innovation raises the health return on care. It's a stylized health-capital index, not life expectancy."),
-    tile("Care gap", pct1(last.health.careGap), vsBase(deltaGap * 100, "pp", 1), toneFor(-deltaGap), "Average share of needed care that households did not receive: care skipped because of cost-sharing or being uninsured, care rationed when demand exceeds provider capacity, and access lost to long waits."),
-    tile("Innovation index", last.innovation.index.toFixed(2), vsBase(deltaInno, "", 2), toneFor(deltaInno), `Emergent medical-technology index (starts at 1.0; R&D intensity now ${last.innovation.rdIntensity.toFixed(2)}×). Funded by the commercial system's revenue and provider margins, with a public/spillover floor. Higher innovation raises the health return on care over time — the dynamic payoff of a well-funded, profitable system.`),
-    tile("Govt. social cost", dollars(last.government.totalSocialCost * NATIONAL), costVsBase, toneFor(-deltaCost), "Annual government health outlays (subsidies + public insurance + direct provision + the ESI tax break) plus the deadweight loss of raising that revenue (1.3× marginal cost of public funds). Scaled from the sample to a US-sized population."),
-  ].join("");
-
-  const timeline = noReform
+  const timeline = !reform
     ? `No reform selected: this is current law for all ${YEARS} years.`
     : `Years 0–${state.reformYear - 1} run under current law. The reform begins in year ${state.reformYear}` +
       (state.phaseInYears > 0
@@ -300,43 +490,36 @@ function renderDashboard(): void {
         : "") +
       `. The tiles compare year ${finalYear} with the same year had there been no reform.`;
 
-  // Coverage mix (stacked area).
+  // Coverage mix (stacked area of mean counts).
   const covSeries: Series[] = (["esi", "individual", "public", "uninsured"] as const).map((k) => ({
     label: COVERAGE_LABELS[k],
     color: COVERAGE_COLORS[k],
-    values: ys.map((y) => y.coverage[k]),
+    values: meanSeries(runs, (y) => y.coverage[k]),
   }));
   const coverageChart = stackedArea("Coverage mix", covSeries, POP, marker);
 
-  // Cost over time.
   const costChart = lineChart({
     title: "Health spending (% of GDP)",
     yFmt: (v) => `${Math.round(v * 100)}%`,
     marker,
-    series: [
-      { label: "This package", color: "#2563eb", values: ys.map((y) => y.spending.nheShareOfGdp) },
-      { label: "No reform", color: "#94a3b8", values: baseline.years.map((y) => y.spending.nheShareOfGdp) },
-    ],
+    series: [line("This package", "#2563eb", (y) => y.spending.nheShareOfGdp), ...(reform ? [baseLine((y) => y.spending.nheShareOfGdp)] : [])],
   });
 
   // Premiums exist only in years with private insurance markets; the lines
   // stop where those markets end (single payer).
-  const silver = ys.map((y) => (y.policy.singlePayer ? null : y.premiums.silver));
-  const esiPremium = ys.map((y) => (y.employer.offerRate > 0 ? y.employer.avgPremium : null));
+  const lastPolicy = primary.years[finalYear]!.policy;
+  const silver = line("Indiv. silver", "#16a34a", (y) => (y.policy.singlePayer ? null : y.premiums.silver));
+  const esiPremium = line("Avg ESI", "#2563eb", (y) => (y.employer.offerRate > 0 ? y.employer.avgPremium : null));
   // What a worker at an offering firm gives up in cash wages to fund the employer's share.
-  const wageOffset = ys.map((y) => (y.employer.offerRate > 0 ? y.employer.wageOffsetPerOfferedWorker : null));
+  const wageOffset = line("ESI cost taken from wages", "#d97706", (y) => (y.employer.offerRate > 0 ? y.employer.wageOffsetPerOfferedWorker : null));
   const premChart =
-    silver.every((v) => v === null) && esiPremium.every((v) => v === null)
+    silver.values.every((v) => v === null) && esiPremium.values.every((v) => v === null)
       ? noteCard("Private premiums", "Not applicable — there are no private insurance markets under single payer.")
       : lineChart({
-          title: last.policy.singlePayer ? "Private premiums (end with single payer)" : "Private premiums and the wages that pay for them",
+          title: lastPolicy.singlePayer ? "Private premiums (end with single payer)" : "Private premiums and the wages that pay for them",
           yFmt: dollars,
           marker,
-          series: [
-            { label: "Indiv. silver", color: "#16a34a", values: silver },
-            { label: "Avg ESI", color: "#2563eb", values: esiPremium },
-            { label: "ESI cost taken from wages", color: "#d97706", values: wageOffset },
-          ],
+          series: [silver, esiPremium, wageOffset],
         });
 
   // Access: wait times, in whichever delivery systems have patients.
@@ -345,40 +528,48 @@ function renderDashboard(): void {
     yFmt: (v) => v.toFixed(v < 10 ? 1 : 0),
     marker,
     series: [
-      { label: "Hospital", color: "#ea580c", values: ys.map((y) => (y.providers.hospital.active ? y.providers.hospital.waitWeeks : null)) },
-      { label: "Physician", color: "#7c3aed", values: ys.map((y) => (y.providers.physician.active ? y.providers.physician.waitWeeks : null)) },
-      ...(ys.some((y) => y.publicProvision)
-        ? [{ label: "Public system", color: "#0891b2", values: ys.map((y) => y.publicProvision?.waitWeeks ?? null) }]
-        : []),
+      line("Hospital", "#ea580c", (y) => (y.providers.hospital.active ? y.providers.hospital.waitWeeks : null)),
+      line("Physician", "#7c3aed", (y) => (y.providers.physician.active ? y.providers.physician.waitWeeks : null)),
+      ...(primary.years.some((y) => y.publicProvision) ? [line("Public system", "#0891b2", (y) => y.publicProvision?.waitWeeks ?? null)] : []),
     ],
   });
 
-  // Supply: capacity relative to year 0. It follows demand with a lag
-  // (construction, training) and only where policy and payment rates allow.
-  const cap0 = { hospital: ys[0]!.providers.hospital.capacity, physician: ys[0]!.providers.physician.capacity };
+  // Supply: capacity relative to year 0, run by run, then averaged.
+  const capacityIndex = (sector: "hospital" | "physician", label: string, color: string): GapSeries => {
+    const perRun = runs.map((r) => {
+      const first = r.years[0]!.providers[sector].capacity;
+      return r.years.map((y) => (y.providers[sector].active ? y.providers[sector].capacity / first : null));
+    });
+    const values: (number | null)[] = [];
+    const lo: (number | null)[] = [];
+    const hi: (number | null)[] = [];
+    for (let year = 0; year <= finalYear; year++) {
+      const vs = perRun.map((p) => p[year]!).filter((v): v is number => v !== null);
+      const all = vs.length === perRun.length && vs.length > 0;
+      values.push(all ? vs.reduce((a, b) => a + b, 0) / vs.length : null);
+      lo.push(all ? Math.min(...vs) : null);
+      hi.push(all ? Math.max(...vs) : null);
+    }
+    return many ? { label, color, values, lo, hi } : { label, color, values };
+  };
   const capacityChart = lineChart({
     title: "Private provider capacity (year 0 = 1.00)",
     yFmt: (v) => v.toFixed(2),
     yMin: 0.5,
     marker,
-    series: [
-      { label: "Hospital", color: "#ea580c", values: ys.map((y) => (y.providers.hospital.active ? y.providers.hospital.capacity / cap0.hospital : null)) },
-      { label: "Physician", color: "#7c3aed", values: ys.map((y) => (y.providers.physician.active ? y.providers.physician.capacity / cap0.physician : null)) },
-    ],
+    series: [capacityIndex("hospital", "Hospital", "#ea580c"), capacityIndex("physician", "Physician", "#7c3aed")],
     reference: { value: 1, label: "year 0" },
   });
 
-  // What private providers are actually paid per unit of care, across all
-  // payers. Rises with consolidation; falls to the administered rate under
-  // single payer; absent when all care is publicly delivered.
+  // What private providers are actually paid per unit of care, across all payers.
   const priceChart = lineChart({
     title: "Prices paid to private providers (all payers, index)",
     yFmt: (v) => v.toFixed(2),
     yMin: 0.6,
     marker,
     series: [
-      { label: "Hospital", color: "#ea580c", values: ys.map((y) => (y.providers.hospital.active ? y.providers.hospital.avgPricePaid : null)) },
-      { label: "Physician", color: "#7c3aed", values: ys.map((y) => (y.providers.physician.active ? y.providers.physician.avgPricePaid : null)) },
+      line("Hospital", "#ea580c", (y) => (y.providers.hospital.active ? y.providers.hospital.avgPricePaid : null)),
+      line("Physician", "#7c3aed", (y) => (y.providers.physician.active ? y.providers.physician.avgPricePaid : null)),
     ],
     reference: { value: PARAMS.providerMarginalCost, label: "provider cost" },
   });
@@ -390,41 +581,100 @@ function renderDashboard(): void {
     yMin: 0,
     marker,
     series: [
-      { label: "Low income", color: "#dc2626", values: ys.map((y) => y.uninsuredRateByIncome.low) },
-      { label: "Middle", color: "#d97706", values: ys.map((y) => y.uninsuredRateByIncome.mid) },
-      { label: "High income", color: "#2563eb", values: ys.map((y) => y.uninsuredRateByIncome.high) },
+      line("Low income", "#dc2626", (y) => y.uninsuredRateByIncome.low),
+      line("Middle", "#d97706", (y) => y.uninsuredRateByIncome.mid),
+      line("High income", "#2563eb", (y) => y.uninsuredRateByIncome.high),
     ],
   });
 
-  // Innovation index over time vs. no reform.
   const innoChart = lineChart({
     title: "Innovation index",
     yFmt: (v) => v.toFixed(2),
     yMin: 1,
     marker,
+    series: [line("This package", "#0891b2", (y) => y.innovation.index), ...(reform ? [baseLine((y) => y.innovation.index)] : [])],
+  });
+
+  const employerChart = lineChart({
+    title: "Employer market (offer rate & generosity)",
+    yFmt: (v) => `${Math.round(v * 100)}%`,
+    yMin: 0,
+    yMax: 1,
+    marker,
     series: [
-      { label: "This package", color: "#0891b2", values: ys.map((y) => y.innovation.index) },
-      { label: "No reform", color: "#94a3b8", values: baseline.years.map((y) => y.innovation.index) },
+      line("ESI offer rate", "#2563eb", (y) => y.employer.offerRate),
+      // Generosity is undefined in years with no employer plans.
+      line("Avg plan AV", "#16a34a", (y) => (y.employer.offerRate > 0 ? y.employer.avgActuarialValue : null)),
     ],
   });
 
+  // Government ledger over the full horizon: cost components stacked (national $, mean of runs).
+  const ledger = (read: (y: YearResult) => number) => meanSeries(runs, (y) => read(y) * NATIONAL);
+  const govChart = stackedAreaDollars(
+    "Government cost (annual)",
+    [
+      { label: "Subsidies", color: "#2563eb", values: ledger((y) => y.government.subsidyOutlays) },
+      { label: "Public ins.", color: "#9333ea", values: ledger((y) => y.government.publicOutlays) },
+      { label: "Direct provision", color: "#0891b2", values: ledger((y) => y.government.publicProvisionOutlays) },
+      { label: "ESI tax break", color: "#16a34a", values: ledger((y) => y.government.esiTaxExpenditure) },
+      { label: "Deadweight loss", color: "#dc2626", values: ledger((y) => y.government.deadweightLoss) },
+    ],
+    dollars,
+    marker,
+  );
+
+  const challengeHtml = state.editingChallenge
+    ? challengeEditor(state.challenge)
+    : state.challenge
+      ? challengeBanner(state.challenge, runs, runs.length === RUNS)
+      : "";
+
   dash.innerHTML =
+    challengeHtml +
     `<p class="timeline">${timeline}</p>` +
     `<div class="tiles">${tiles}</div>` +
+    `<p class="runstatus" id="runstatus">${esc(runStatus(runs.length))}</p>` +
     `<div class="grid">${yearBar()}` +
     `<div class="cell" id="triCell">${triangleChart()}</div><div class="cell" id="scoreCell">${scoreChart()}</div>` +
-    `${coverageChart}${costChart}${waitChart}${capacityChart}${premChart}${priceChart}${distChart}${innoChart}${employerChart(ys, marker)}${govChart(ys, marker)}</div>` +
-    drillDown();
+    cell("coverage", coverageChart) +
+    cell("spending", costChart) +
+    cell("waits", waitChart) +
+    cell("capacity", capacityChart) +
+    (premChart.startsWith("<svg") ? cell("premiums", premChart) : premChart) +
+    cell("prices", priceChart) +
+    cell("uninsured", distChart) +
+    cell("innovation", innoChart) +
+    cell("employer", employerChart) +
+    cell("gov", govChart) +
+    `</div>` +
+    `<div id="drillmount">${drillDown()}</div>`;
 
+  wireDashboard(dash);
+}
+
+function wireDashboard(dash: HTMLElement): void {
   // Both year sliders (above the triangle and in the "Why?" panel) pick the same year.
-  for (const slider of document.querySelectorAll<HTMLInputElement>(".yearslider")) {
+  wireYearSliders(dash.querySelector(".grid")!);
+  document.getElementById("playYears")!.addEventListener("click", togglePlayback);
+  for (const btn of dash.querySelectorAll<HTMLButtonElement>(".whybtn")) {
+    btn.addEventListener("click", () => {
+      state.explain = btn.dataset.why ?? null;
+      refreshDrill();
+      document.getElementById("drillmount")!.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }
+  wireDrill();
+  wireChallenge(dash);
+}
+
+function wireYearSliders(root: ParentNode): void {
+  for (const slider of root.querySelectorAll<HTMLInputElement>(".yearslider")) {
     slider.addEventListener("input", () => {
       stopPlayback();
       state.selectedYear = Number(slider.value);
       updateYearViews();
     });
   }
-  document.getElementById("playYears")!.addEventListener("click", togglePlayback);
 }
 
 // ---------------- Year selection: the Iron Triangle and "Why?" follow it ----------------
@@ -434,22 +684,16 @@ const TRI_AXES = [
   { key: "access", label: "Access", color: "#ea580c" },
 ] as const;
 
-function hasReform(): boolean {
-  return describeChanges(BASELINE_POLICY, state.policy).length > 0;
-}
-
-/** The triangle for the selected year, against the no-reform run in the same year. */
+/** The triangle for the selected year, against the no-reform runs in the same year. */
 function triangleChart(): string {
-  const y = result.years[state.selectedYear]!;
-  const b = baseline.years[state.selectedYear]!;
-  return ironTriangle(`Iron Triangle — year ${y.year}`, triangleScore(y), triangleScore(b));
+  const { runs, base } = ready();
+  return ironTriangle(`Iron Triangle — year ${state.selectedYear}`, meanTriangle(runs, state.selectedYear), meanTriangle(base, state.selectedYear));
 }
 
 /** The three triangle scores in every year; the cursor marks the selected year. */
 function scoreChart(): string {
+  const { runs, base } = ready();
   const reform = hasReform();
-  const scores = result.years.map(triangleScore);
-  const base = baseline.years.map(triangleScore);
   return lineChart({
     title: "Iron Triangle scores over time (1 = best)",
     yFmt: (v) => v.toFixed(2),
@@ -459,18 +703,22 @@ function scoreChart(): string {
     cursor: state.selectedYear,
     legendNote: reform ? "dashed = no reform" : undefined,
     series: [
-      ...TRI_AXES.map((a) => ({ label: a.label, color: a.color, values: scores.map((s) => s[a.key]) })),
+      ...TRI_AXES.map((a) => ({ label: a.label, color: a.color, values: meanSeries(runs, (y) => triangleScore(y)[a.key]) })),
       ...(reform
-        ? TRI_AXES.map((a) => ({ label: a.label, color: a.color, values: base.map((s) => s[a.key]), dashed: true, hideLegend: true }))
+        ? TRI_AXES.map((a) => ({ label: a.label, color: a.color, values: meanSeries(base, (y) => triangleScore(y)[a.key]), dashed: true, hideLegend: true }))
         : []),
     ],
   });
 }
 
+const PLAY = "▶ Play";
+const PAUSE = "❚❚ Pause";
+let playTimer: number | undefined;
+
 function yearBar(): string {
   return (
     `<div class="yearbar"><button id="playYears" title="Step through the years">${playTimer === undefined ? PLAY : PAUSE}</button>` +
-    `<input type="range" class="yearslider" aria-label="Year shown in the Iron Triangle" min="0" max="${result.years.length - 1}" value="${state.selectedYear}">` +
+    `<input type="range" class="yearslider" aria-label="Year shown in the Iron Triangle" min="0" max="${YEARS - 1}" value="${state.selectedYear}">` +
     `<span class="yearlabel">${yearLabel()}</span></div>`
   );
 }
@@ -483,14 +731,14 @@ function updateYearViews(): void {
   };
   set("triCell", triangleChart());
   set("scoreCell", scoreChart());
-  set("eventlist", eventItems());
+  if (!state.explain) set("eventlist", eventItems());
   for (const el of document.querySelectorAll(".yearlabel")) el.textContent = yearLabel();
   for (const s of document.querySelectorAll<HTMLInputElement>(".yearslider")) s.value = String(state.selectedYear);
+  for (const li of document.querySelectorAll<HTMLElement>("#eventlist li[data-year]")) {
+    li.classList.toggle("current", Number(li.dataset.year) === state.selectedYear);
+  }
 }
 
-const PLAY = "\u25B6 Play";
-const PAUSE = "\u275A\u275A Pause";
-let playTimer: number | undefined;
 function stopPlayback(): void {
   window.clearInterval(playTimer);
   playTimer = undefined;
@@ -499,43 +747,14 @@ function stopPlayback(): void {
 }
 function togglePlayback(): void {
   if (playTimer !== undefined) return stopPlayback();
-  if (state.selectedYear >= result.years.length - 1) state.selectedYear = 0;
+  if (state.selectedYear >= YEARS - 1) state.selectedYear = 0;
   updateYearViews();
   document.getElementById("playYears")!.textContent = PAUSE;
   playTimer = window.setInterval(() => {
-    if (state.selectedYear >= result.years.length - 1) return stopPlayback();
+    if (state.selectedYear >= YEARS - 1) return stopPlayback();
     state.selectedYear += 1;
     updateYearViews();
   }, 500);
-}
-
-/** Employer market over the full horizon: offer rate and plan generosity (both %). */
-function employerChart(ys: YearResult[], marker?: ReformMarker): string {
-  return lineChart({
-    title: "Employer market (offer rate & generosity)",
-    yFmt: (v) => `${Math.round(v * 100)}%`,
-    yMin: 0,
-    yMax: 1,
-    marker,
-    series: [
-      { label: "ESI offer rate", color: "#2563eb", values: ys.map((y) => y.employer.offerRate) },
-      // Generosity is undefined in years with no employer plans.
-      { label: "Avg plan AV", color: "#16a34a", values: ys.map((y) => (y.employer.offerRate > 0 ? y.employer.avgActuarialValue : null)) },
-    ],
-  });
-}
-
-/** Government ledger over the full horizon: cost components stacked (national $). */
-function govChart(ys: YearResult[], marker?: ReformMarker): string {
-  const scale = (vals: number[]) => vals.map((v) => v * NATIONAL);
-  const series: Series[] = [
-    { label: "Subsidies", color: "#2563eb", values: scale(ys.map((y) => y.government.subsidyOutlays)) },
-    { label: "Public ins.", color: "#9333ea", values: scale(ys.map((y) => y.government.publicOutlays)) },
-    { label: "Direct provision", color: "#0891b2", values: scale(ys.map((y) => y.government.publicProvisionOutlays)) },
-    { label: "ESI tax break", color: "#16a34a", values: scale(ys.map((y) => y.government.esiTaxExpenditure)) },
-    { label: "Deadweight loss", color: "#dc2626", values: scale(ys.map((y) => y.government.deadweightLoss)) },
-  ];
-  return stackedAreaDollars("Government cost (annual)", series, dollars, marker);
 }
 
 /** A dashboard-grid card showing an explanatory note in place of a chart. */
@@ -545,7 +764,7 @@ function noteCard(title: string, text: string): string {
 
 /** "Year 6 — reform phasing in" etc. */
 function yearLabel(): string {
-  const y = result.years[state.selectedYear];
+  const y = ready().runs[0]?.years[state.selectedYear];
   if (!y) return `Year ${state.selectedYear}`;
   const phase = !hasReform()
     ? "current law"
@@ -561,82 +780,181 @@ function yearLabel(): string {
   return `Year ${y.year} — ${phase}`;
 }
 
+// ---------------- "Why?" panel: by year, or by chart ----------------
+const eventHtml = (e: ExplanationEvent): string => `<span class="tag tag-${e.module}">${e.module}</span>${esc(e.narrative)}`;
+
+/** Events are specific to one run (which year a merger happens is luck), so they come from run 1. */
+const RUN_NOTE = `Events are from run 1 of ${RUNS}. Chance events such as mergers fall in different years in the other runs.`;
+
 function drillDown(): string {
+  return state.explain && EXPLAIN[state.explain] ? chartDrill(state.explain, EXPLAIN[state.explain]!) : yearDrill();
+}
+
+function yearDrill(): string {
   return (
     `<div class="drill"><div class="drillhead"><span class="charttitle">Why? — what happened in <span class="yearlabel">${yearLabel()}</span></span>` +
-    `<input type="range" class="yearslider" aria-label="Year explained" min="0" max="${result.years.length - 1}" value="${state.selectedYear}"></div>` +
-    `<ul id="eventlist">${eventItems()}</ul></div>`
+    `<input type="range" class="yearslider" aria-label="Year explained" min="0" max="${YEARS - 1}" value="${state.selectedYear}"></div>` +
+    `<ul id="eventlist">${eventItems()}</ul>` +
+    `<p class="drillnote">${RUN_NOTE} Use the “Why?” button on a chart to follow one outcome through all the years.</p></div>`
   );
 }
 
 function eventItems(): string {
-  const y = result.years[state.selectedYear];
+  const y = ready().runs[0]?.years[state.selectedYear];
   if (!y || y.events.length === 0) return `<li class="muted">A quiet year — no notable events.</li>`;
-  return y.events.map((e) => `<li><span class="tag tag-${e.module}">${e.module}</span>${escapeHtml(e.narrative)}</li>`).join("");
+  return y.events.map((e) => `<li>${eventHtml(e)}</li>`).join("");
 }
 
-// ---- helpers ----
-function toneFor(goodDelta: number): string {
-  if (goodDelta > 0.002) return "good";
-  if (goodDelta < -0.002) return "bad";
-  return "";
-}
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+/** Fiscal ledgers are written every year; for the chart view, keep the turning points. */
+function ledgerYears(): Set<number> {
+  return new Set([0, state.reformYear - 1, state.reformYear, state.reformYear + state.phaseInYears, YEARS - 1]);
 }
 
-// ---------------- Run loop ----------------
-let debounceTimer: number | undefined;
-function rerunDebounced(): void {
-  window.clearTimeout(debounceTimer);
-  debounceTimer = window.setTimeout(rerun, 140);
-}
-function rerun(): void {
-  document.body.classList.add("computing");
-  // Defer so the "computing" cursor paints before the (synchronous) run.
-  requestAnimationFrame(() => {
-    result = runSimulation(cfg(state.policy));
-    state.selectedYear = clamp(state.selectedYear, 0, result.years.length - 1);
-    syncPreset();
-    renderDashboard();
-    location.replace(
-      `#${encodeState({ seed: state.seed, policy: state.policy, reformYear: state.reformYear, phaseInYears: state.phaseInYears })}`,
-    );
-    document.body.classList.remove("computing");
-  });
-}
+function chartDrill(key: string, ex: Explain): string {
+  const { runs } = ready();
+  const primary = runs[0]!;
+  const reform = hasReform();
+  const keep = ledgerYears();
+  const events = primary.years.flatMap((y) =>
+    y.events.filter((e) => ex.types.includes(e.type) && (e.type !== "fiscal-ledger" || keep.has(y.year))),
+  );
+  const items =
+    events.length === 0
+      ? `<li class="muted">No notable events of this kind in this run: the chart moved gradually, for the reason above.</li>`
+      : events
+          .map(
+            (e) =>
+              `<li data-year="${e.year}" class="${e.year === state.selectedYear ? "current" : ""}">` +
+              `<button class="yearlink" data-year="${e.year}" title="Show this year in the Iron Triangle">Year ${e.year}</button>${eventHtml(e)}</li>`,
+          )
+          .join("");
 
-// ---------------- Boot ----------------
-function boot(): void {
-  if (location.hash.length > 1) {
-    const decoded = decodeState(location.hash.slice(1));
-    if (decoded) {
-      state.seed = decoded.seed;
-      state.policy = decoded.policy;
-      state.reformYear = decoded.reformYear;
-      state.phaseInYears = decoded.phaseInYears;
-      state.selectedYear = decoded.reformYear;
+  // Where the lead series started, where it ended, and its biggest single-year move (mean of runs).
+  let summary = "";
+  if (ex.lead) {
+    const lead = ex.lead;
+    const perRun = runs.map((r) => r.years.map((y) => lead.read(y, r.years[0]!)));
+    const mean = perRun[0]!.map((_, year) => {
+      const vs = perRun.map((p) => p[year]!).filter((v): v is number => v !== null);
+      return vs.length === perRun.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+    });
+    const fromYear = reform ? state.reformYear - 1 : 0;
+    const from = mean[fromYear];
+    const present = mean.map((v, year) => ({ v, year })).filter((p): p is { v: number; year: number } => p.v !== null);
+    const lastPoint = present.at(-1);
+    if (from != null && lastPoint) {
+      let biggest = { year: -1, change: 0 };
+      for (let year = 1; year < mean.length; year++) {
+        const a = mean[year - 1];
+        const b = mean[year];
+        if (a != null && b != null && Math.abs(b - a) > Math.abs(biggest.change)) biggest = { year, change: b - a };
+      }
+      summary =
+        `${esc(lead.label)} was ${esc(lead.fmt(from))} in year ${fromYear}${reform ? " (the last year before the reform)" : ""} ` +
+        `and ${esc(lead.fmt(lastPoint.v))} in year ${lastPoint.year}` +
+        (lastPoint.year < YEARS - 1 ? `, after which it no longer exists` : "") +
+        `.` +
+        (biggest.year >= 0
+          ? ` Its largest one-year move came in year ${biggest.year}: from ${esc(lead.fmt(mean[biggest.year - 1]!))} to ${esc(lead.fmt(mean[biggest.year]!))}.`
+          : "");
     }
   }
-  // The no-reform counterfactual uses the same seed, so the years before the
-  // reform are identical in both runs.
-  baseline = runSimulation(cfg(BASELINE_POLICY));
-  result = baseline;
 
+  return (
+    `<div class="drill"><div class="drillhead"><span class="charttitle">Why? — ${esc(ex.title)}</span>` +
+    `<button id="drillByYear">All events, year by year</button></div>` +
+    `<p class="mechanism">${esc(ex.mechanism)}</p>` +
+    (summary ? `<p class="mechanism">${summary}</p>` : "") +
+    `<ul id="eventlist" data-chart="${key}">${items}</ul>` +
+    `<p class="drillnote">${RUN_NOTE} Click a year to show it in the Iron Triangle.</p></div>`
+  );
+}
+
+function refreshDrill(): void {
+  const mount = document.getElementById("drillmount");
+  if (!mount) return;
+  mount.innerHTML = drillDown();
+  wireDrill();
+}
+
+function wireDrill(): void {
+  const mount = document.getElementById("drillmount");
+  if (!mount) return;
+  wireYearSliders(mount);
+  mount.querySelector("#drillByYear")?.addEventListener("click", () => {
+    state.explain = null;
+    refreshDrill();
+  });
+  for (const btn of mount.querySelectorAll<HTMLButtonElement>(".yearlink")) {
+    btn.addEventListener("click", () => {
+      stopPlayback();
+      state.selectedYear = Number(btn.dataset.year);
+      updateYearViews();
+    });
+  }
+}
+
+// ---------------- Challenge: banner and editor ----------------
+function wireChallenge(dash: HTMLElement): void {
+  const editor = dash.querySelector<HTMLElement>("#challengeEditor");
+  if (!editor) return;
+  const rows = editor.querySelector("#chRows")!;
+  const wireRow = (row: Element) => {
+    row.querySelector(".chDel")!.addEventListener("click", () => row.remove());
+    row.querySelector(".chMetric")!.addEventListener("change", (e) => {
+      const unit = METRIC_BY_KEY.get((e.target as HTMLSelectElement).value)?.unit ?? "";
+      row.querySelector(".chUnit")!.textContent = unit;
+    });
+  };
+  rows.querySelectorAll(".chrow").forEach(wireRow);
+  editor.querySelector("#chAdd")!.addEventListener("click", () => {
+    if (rows.querySelectorAll(".chrow").length >= MAX_CRITERIA) return flash(`A challenge can have at most ${MAX_CRITERIA} targets.`);
+    rows.insertAdjacentHTML("beforeend", criterionRow({ metric: "nhe", op: "<=", value: 18 }));
+    wireRow(rows.lastElementChild!);
+  });
+  const close = (challenge: Challenge | null) => {
+    state.challenge = challenge;
+    state.editingChallenge = false;
+    history.replaceState(null, "", `#${encodeState(shareState())}`);
+    renderDashboard();
+    syncChallengeButton();
+  };
+  editor.querySelector("#chApply")!.addEventListener("click", () => {
+    const ch = readEditor(editor);
+    if (!ch) return flash("Add at least one target with a number.");
+    close(ch);
+    flash("Challenge set. “Copy share link” now carries it.");
+  });
+  editor.querySelector("#chCancel")!.addEventListener("click", () => close(state.challenge));
+  editor.querySelector("#chRemove")?.addEventListener("click", () => close(null));
+}
+
+function syncChallengeButton(): void {
+  const btn = document.getElementById("challengeBtn");
+  if (btn) btn.textContent = state.challenge ? "Edit challenge" : "Write a challenge";
+}
+
+// ---------------- Views ----------------
+let view: "simulator" | "compare" = "simulator";
+
+function showSimulator(): void {
+  view = "simulator";
+  shownRuns = -1;
   const app = document.getElementById("app")!;
   app.innerHTML = `
     <header>
       <div><h1>Health Policy Simulator</h1><p class="sub">Design a reform, choose when it starts, and watch the Iron Triangle — cost, quality, access — play out against the system that already exists.</p></div>
-      <div class="actions"><button id="share">Copy share link</button><button id="reset">Reset</button></div>
+      <div class="actions"><button id="challengeBtn">Write a challenge</button><button id="compareBtn">Compare packages</button><button id="share">Copy share link</button><button id="reset">Reset</button></div>
     </header>
-    <div class="layout"><div id="panelmount"></div><main id="dash"></main></div>`;
+    <div class="layout"><div id="panelmount"></div><main id="dash"><p class="timeline">Running the simulation…</p></main></div>`;
+  syncFns.length = 0;
   document.getElementById("panelmount")!.replaceWith(buildPanel());
   syncInputs();
+  syncChallengeButton();
   document.getElementById("share")!.addEventListener("click", async () => {
-    const url = location.href;
     try {
-      await navigator.clipboard.writeText(url);
-      flash("Link copied!");
+      await navigator.clipboard.writeText(location.href);
+      flash(state.challenge ? "Link copied, with your package and the challenge." : "Link copied!");
     } catch {
       flash("Copy this URL from the address bar.");
     }
@@ -646,10 +964,56 @@ function boot(): void {
     state.reformYear = TIMING.defaultReformYear;
     state.phaseInYears = 0;
     state.selectedYear = TIMING.defaultReformYear;
+    state.explain = null;
     syncInputs();
     rerun();
   });
+  document.getElementById("challengeBtn")!.addEventListener("click", () => {
+    state.editingChallenge = !state.editingChallenge;
+    renderDashboard();
+    document.getElementById("dash")!.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  document.getElementById("compareBtn")!.addEventListener("click", () => showCompare(""));
   rerun();
+}
+
+function showCompare(initialText: string): void {
+  view = "compare";
+  stopPlayback();
+  pool.cancel("reform");
+  document.body.classList.remove("computing");
+  const app = document.getElementById("app")!;
+  app.innerHTML = `
+    <header>
+      <div><h1>Health Policy Simulator</h1><p class="sub">Packages side by side: the Iron Triangle, the headline numbers, and how each one gets there.</p></div>
+    </header>
+    <div id="compare"></div>`;
+  if (!initialText) history.replaceState(null, "", "#cmp.");
+  mountCompare(
+    document.getElementById("compare")!,
+    {
+      pool,
+      current: shareState,
+      open: (s) => {
+        applyShareState(s);
+        showSimulator();
+      },
+      back: showSimulator,
+      flash,
+    },
+    initialText,
+  );
+}
+
+function applyShareState(s: ShareState): void {
+  state.seed = s.seed;
+  state.policy = { ...s.policy };
+  state.reformYear = s.reformYear;
+  state.phaseInYears = s.phaseInYears;
+  state.challenge = s.challenge;
+  state.selectedYear = s.reformYear;
+  state.explain = null;
+  state.editingChallenge = false;
 }
 
 function flash(msg: string): void {
@@ -657,7 +1021,22 @@ function flash(msg: string): void {
   el.className = "flash";
   el.textContent = msg;
   document.body.appendChild(el);
-  window.setTimeout(() => el.remove(), 1800);
+  window.setTimeout(() => el.remove(), 2200);
+}
+
+// ---------------- Boot ----------------
+function boot(): void {
+  const hash = location.hash.slice(1);
+  const compareText = decodeCompare(hash);
+  if (compareText !== null) {
+    showCompare(compareText);
+    return;
+  }
+  if (hash) {
+    const decoded = decodeState(hash);
+    if (decoded) applyShareState(decoded);
+  }
+  showSimulator();
 }
 
 boot();
