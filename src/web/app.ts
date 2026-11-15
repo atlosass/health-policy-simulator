@@ -21,7 +21,6 @@ import {
   lineChart,
   stackedArea,
   stackedAreaDollars,
-  barChart,
   ironTriangle,
   type Series,
   type ReformMarker,
@@ -340,7 +339,7 @@ function renderDashboard(): void {
   // Access: wait times, in whichever delivery systems have patients.
   const waitChart = lineChart({
     title: "Wait times (weeks)",
-    yFmt: (v) => v.toFixed(0),
+    yFmt: (v) => v.toFixed(v < 10 ? 1 : 0),
     marker,
     series: [
       { label: "Hospital", color: "#ea580c", values: ys.map((y) => (y.providers.hospital.active ? y.providers.hospital.waitWeeks : null)) },
@@ -366,20 +365,18 @@ function renderDashboard(): void {
     reference: { value: PARAMS.providerMarginalCost, label: "provider cost" },
   });
 
-  // Iron triangle.
-  const triChart = ironTriangle(triangleScore(last), triangleScore(b));
-
-  // Uninsured rate by income tercile (final year) — a snapshot bar chart.
-  const ui = last.uninsuredRateByIncome;
-  const distChart = barChart(
-    `Uninsured rate by income (year ${finalYear})`,
-    [
-      { label: "Low", value: ui.low, color: "#dc2626" },
-      { label: "Middle", value: ui.mid, color: "#dc2626" },
-      { label: "High", value: ui.high, color: "#dc2626" },
+  // Uninsured rate within each third of the income distribution, over time.
+  const distChart = lineChart({
+    title: "Uninsured rate by income third",
+    yFmt: (v) => `${Math.round(v * 100)}%`,
+    yMin: 0,
+    marker,
+    series: [
+      { label: "Low income", color: "#dc2626", values: ys.map((y) => y.uninsuredRateByIncome.low) },
+      { label: "Middle", color: "#d97706", values: ys.map((y) => y.uninsuredRateByIncome.mid) },
+      { label: "High income", color: "#2563eb", values: ys.map((y) => y.uninsuredRateByIncome.high) },
     ],
-    (v) => `${Math.round(v * 100)}%`,
-  );
+  });
 
   // Innovation index over time vs. no reform.
   const innoChart = lineChart({
@@ -396,20 +393,102 @@ function renderDashboard(): void {
   dash.innerHTML =
     `<p class="timeline">${timeline}</p>` +
     `<div class="tiles">${tiles}</div>` +
-    `<div class="grid">${coverageChart}${triChart}${costChart}${waitChart}${premChart}${priceChart}${distChart}${innoChart}${employerChart(ys, marker)}${govChart(ys, marker)}</div>` +
+    `<div class="grid">${yearBar()}` +
+    `<div class="cell" id="triCell">${triangleChart()}</div><div class="cell" id="scoreCell">${scoreChart()}</div>` +
+    `${coverageChart}${costChart}${waitChart}${premChart}${priceChart}${distChart}${innoChart}${employerChart(ys, marker)}${govChart(ys, marker)}</div>` +
     drillDown();
 
-  // Wire the drill-down year slider.
-  const yearSlider = document.getElementById("yearSlider") as HTMLInputElement | null;
-  if (yearSlider) {
-    yearSlider.addEventListener("input", () => {
-      state.selectedYear = Number(yearSlider.value);
-      const list = document.getElementById("eventlist");
-      if (list) list.innerHTML = eventItems();
-      const lbl = document.getElementById("yearLabel");
-      if (lbl) lbl.textContent = yearLabel();
+  // Both year sliders (above the triangle and in the "Why?" panel) pick the same year.
+  for (const slider of document.querySelectorAll<HTMLInputElement>(".yearslider")) {
+    slider.addEventListener("input", () => {
+      stopPlayback();
+      state.selectedYear = Number(slider.value);
+      updateYearViews();
     });
   }
+  document.getElementById("playYears")!.addEventListener("click", togglePlayback);
+}
+
+// ---------------- Year selection: the Iron Triangle and "Why?" follow it ----------------
+const TRI_AXES = [
+  { key: "cost", label: "Affordability", color: "#2563eb" },
+  { key: "quality", label: "Quality", color: "#16a34a" },
+  { key: "access", label: "Access", color: "#ea580c" },
+] as const;
+
+function hasReform(): boolean {
+  return describeChanges(BASELINE_POLICY, state.policy).length > 0;
+}
+
+/** The triangle for the selected year, against the no-reform run in the same year. */
+function triangleChart(): string {
+  const y = result.years[state.selectedYear]!;
+  const b = baseline.years[state.selectedYear]!;
+  return ironTriangle(`Iron Triangle — year ${y.year}`, triangleScore(y), triangleScore(b));
+}
+
+/** The three triangle scores in every year; the cursor marks the selected year. */
+function scoreChart(): string {
+  const reform = hasReform();
+  const scores = result.years.map(triangleScore);
+  const base = baseline.years.map(triangleScore);
+  return lineChart({
+    title: "Iron Triangle scores over time (1 = best)",
+    yFmt: (v) => v.toFixed(2),
+    yMin: 0,
+    yMax: 1,
+    marker: reform ? { start: state.reformYear, phaseIn: state.phaseInYears } : undefined,
+    cursor: state.selectedYear,
+    legendNote: reform ? "dashed = no reform" : undefined,
+    series: [
+      ...TRI_AXES.map((a) => ({ label: a.label, color: a.color, values: scores.map((s) => s[a.key]) })),
+      ...(reform
+        ? TRI_AXES.map((a) => ({ label: a.label, color: a.color, values: base.map((s) => s[a.key]), dashed: true, hideLegend: true }))
+        : []),
+    ],
+  });
+}
+
+function yearBar(): string {
+  return (
+    `<div class="yearbar"><button id="playYears" title="Step through the years">${playTimer === undefined ? PLAY : PAUSE}</button>` +
+    `<input type="range" class="yearslider" aria-label="Year shown in the Iron Triangle" min="0" max="${result.years.length - 1}" value="${state.selectedYear}">` +
+    `<span class="yearlabel">${yearLabel()}</span></div>`
+  );
+}
+
+/** Redraw everything that depends on the selected year (cheap: no re-simulation). */
+function updateYearViews(): void {
+  const set = (id: string, html: string) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = html;
+  };
+  set("triCell", triangleChart());
+  set("scoreCell", scoreChart());
+  set("eventlist", eventItems());
+  for (const el of document.querySelectorAll(".yearlabel")) el.textContent = yearLabel();
+  for (const s of document.querySelectorAll<HTMLInputElement>(".yearslider")) s.value = String(state.selectedYear);
+}
+
+const PLAY = "\u25B6 Play";
+const PAUSE = "\u275A\u275A Pause";
+let playTimer: number | undefined;
+function stopPlayback(): void {
+  window.clearInterval(playTimer);
+  playTimer = undefined;
+  const btn = document.getElementById("playYears");
+  if (btn) btn.textContent = PLAY;
+}
+function togglePlayback(): void {
+  if (playTimer !== undefined) return stopPlayback();
+  if (state.selectedYear >= result.years.length - 1) state.selectedYear = 0;
+  updateYearViews();
+  document.getElementById("playYears")!.textContent = PAUSE;
+  playTimer = window.setInterval(() => {
+    if (state.selectedYear >= result.years.length - 1) return stopPlayback();
+    state.selectedYear += 1;
+    updateYearViews();
+  }, 500);
 }
 
 /** Employer market over the full horizon: offer rate and plan generosity (both %). */
@@ -450,8 +529,7 @@ function noteCard(title: string, text: string): string {
 function yearLabel(): string {
   const y = result.years[state.selectedYear];
   if (!y) return `Year ${state.selectedYear}`;
-  const noReform = describeChanges(BASELINE_POLICY, state.policy).length === 0;
-  const phase = noReform
+  const phase = !hasReform()
     ? "current law"
     : y.reformProgress === 0
       ? "before the reform"
@@ -467,8 +545,8 @@ function yearLabel(): string {
 
 function drillDown(): string {
   return (
-    `<div class="drill"><div class="drillhead"><span class="charttitle">Why? — what happened in <span id="yearLabel">${yearLabel()}</span></span>` +
-    `<input type="range" id="yearSlider" min="0" max="${result.years.length - 1}" value="${state.selectedYear}"></div>` +
+    `<div class="drill"><div class="drillhead"><span class="charttitle">Why? — what happened in <span class="yearlabel">${yearLabel()}</span></span>` +
+    `<input type="range" class="yearslider" aria-label="Year explained" min="0" max="${result.years.length - 1}" value="${state.selectedYear}"></div>` +
     `<ul id="eventlist">${eventItems()}</ul></div>`
   );
 }

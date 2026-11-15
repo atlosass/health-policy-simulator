@@ -57,7 +57,14 @@
       .grid line.grid, .grid polygon.grid, svg .grid { stroke: var(--line); stroke-width: 1; }
       .ytick, .xtick { fill: var(--muted); font-size: 9px; } .ytick { text-anchor: end; } .xtick { text-anchor: middle; }
       .legend { fill: var(--muted); font-size: 10px; } .axislabel { fill: var(--ink); font-size: 10px; font-weight: 600; }
-      .barval { fill: var(--ink); font-size: 10px; font-weight: 600; text-anchor: middle; }
+      .cursorline { stroke: var(--ink); stroke-width: 1; opacity: 0.45; }
+      /* Year control spanning the grid; the two cells below it redraw as the year changes. */
+      .yearbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; }
+      .yearbar button { font: inherit; padding: 5px 10px; border: 1px solid var(--line); background: #fff; border-radius: 8px; cursor: pointer; min-width: 84px; }
+      .yearbar button:hover { border-color: var(--accent); color: var(--accent); }
+      .yearbar input[type="range"] { flex: 1; max-width: 420px; }
+      .yearbar .yearlabel { font-weight: 700; font-size: 12.5px; }
+      .cell { display: flex; min-width: 0; }
       .refline { stroke: #94a3b8; stroke-dasharray: 3 3; }
       .reflabel { fill: var(--muted); font-size: 9px; text-anchor: end; }
       /* Reform marker: where the reform begins, plus a band over any phase-in */

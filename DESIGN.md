@@ -127,12 +127,12 @@ Phase-in applies to the whole package, not lever by lever (§2a). *Not built:* b
 What the dashboard shows today:
 
 - **Tiles (final year, each with its change against the no-reform run):** insured rate, health spending (% of GDP), population health, care gap, innovation index, government social cost (scaled to a US-sized population).
-- **Coverage:** coverage mix over time (ESI / individual / public / uninsured); uninsured rate by income tercile in the final year.
+- **Coverage:** coverage mix over time (ESI / individual / public / uninsured); uninsured rate within each income third over time.
 - **Cost:** health spending as % of GDP against the no-reform path; private premiums; prices paid to private providers (all payers, with a provider-cost reference line); government cost over time, itemized (subsidies, public insurance, direct provision, ESI tax break, deadweight loss).
 - **Quality:** population health index; innovation index against the no-reform path.
 - **Access:** wait times by sector (hospital, physician, public system); care gap.
 - **Employer market:** offer rate and average generosity over time.
-- **Iron Triangle:** the package against the no-reform run on affordability, quality and access. Access is `1 − care gap / 0.25`, clamped to [0, 1].
+- **Iron Triangle:** the package against the no-reform run on affordability, quality and access, for a selected year (a year bar with a slider and Play button steps through the run). A companion chart plots the three scores in every year, dashed for no reform. Access is `1 − care gap / 0.25`, clamped to [0, 1].
 - **Reform marker:** every time-series chart carries a dashed line at the reform year and a shaded band over any phase-in.
 - **Absent quantities:** a series stops where the thing it measures stops existing (private premiums and employer plan generosity under single payer, private-sector waits and prices when delivery is all public); nothing is carried forward from the last year it existed. The employer offer rate is the exception that is drawn at zero under single payer, because zero is its true value.
 
@@ -156,7 +156,7 @@ Only the solo sandbox exists today. Modes 2 and 3 are planned (§9); share links
 
 - **Engine:** TypeScript, pure functions, zero dependencies; seeded PRNG (mulberry32). 10k agents × 20 years runs in well under a second. One RNG stream drives everything, so a policy change that alters the number of draws shifts every later draw; separate streams per module are planned (§9).
 - **Zero-dependency toolchain (chosen because the project lives on Google Drive, which can't handle `node_modules`):** the whole stack is dependency-free. Node 24 runs the TypeScript engine natively; `node --test` is the test runner; `tsc` runs via `npx` from the C: cache. The **frontend is a no-build static app**: `tsc` (with `rewriteRelativeImportExtensions`) compiles `src/engine` + `src/web` to plain browser ES modules in `web/dist/`, and the browser loads them directly — no bundler, no `node_modules`, fully offline, deployable as static files anywhere.
-- **Frontend:** vanilla TypeScript + DOM, **hand-rolled SVG charts** (line, stacked-area, dollar stacked-area, categorical bar, Iron Triangle radar) — no React, no charting library. Policy panel (left, sticky: scenario menu, timing controls, levers) ⇄ live dashboard (6 tiles with hover tooltips; 10 charts, see §5) ⇄ "Why?" drill-down (per-year narrative events). Each change runs the reform once (8k agents × 20 years); the no-reform counterfactual is computed once at load. Slider input is debounced.
+- **Frontend:** vanilla TypeScript + DOM, **hand-rolled SVG charts** (line, stacked-area, dollar stacked-area, categorical bar, Iron Triangle radar) — no React, no charting library. Policy panel (left, sticky: scenario menu, timing controls, levers) ⇄ live dashboard (6 tiles with hover tooltips; 11 charts, see §5) ⇄ "Why?" drill-down (per-year narrative events). Each change runs the reform once (8k agents × 20 years); the no-reform counterfactual is computed once at load. Slider input is debounced.
 - **State sharing:** policy package, reform year, phase-in and seed serialized (diff-from-default → base64) into the URL hash; "Copy share link" button. Decoding validates the type of every field and falls back to the default for anything malformed. No backend ever.
 - **Run it:** `npm run build` then `npm run serve` (a ~30-line zero-dep Node static server at `scripts/serve.ts`) → http://localhost:5173/. Or `npm run dev` (build + serve).
 - **Hosting:** static site — `web/` is the deployable root (GitHub Pages / Netlify / a USB stick / the LMS).

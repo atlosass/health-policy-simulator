@@ -22,6 +22,10 @@ export interface GapSeries {
   label: string;
   color: string;
   values: (number | null)[];
+  /** Draw as a thinner dashed line (used for the no-reform comparison). */
+  dashed?: boolean;
+  /** Leave this series out of the legend. */
+  hideLegend?: boolean;
 }
 
 /** Where the reform begins on the year axis, and how many years it takes to phase in. */
@@ -40,6 +44,10 @@ interface AxisChartOpts {
   /** Optional horizontal reference line (e.g., a target). */
   reference?: { value: number; label: string };
   marker?: ReformMarker;
+  /** Year to highlight with a vertical cursor line. */
+  cursor?: number;
+  /** Short text shown after the legend entries (e.g., "dashed = no reform"). */
+  legendNote?: string;
 }
 
 function yTicks(min: number, max: number, n = 4): number[] {
@@ -102,7 +110,10 @@ export function lineChart(opts: AxisChartOpts): string {
         d += `${penDown ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)} `;
         penDown = true;
       });
-      return d ? `<path d="${d.trim()}" fill="none" stroke="${s.color}" stroke-width="2"/>` : "";
+      if (!d) return "";
+      return s.dashed
+        ? `<path d="${d.trim()}" fill="none" stroke="${s.color}" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.75"/>`
+        : `<path d="${d.trim()}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
     })
     .join("");
 
@@ -111,14 +122,24 @@ export function lineChart(opts: AxisChartOpts): string {
       `<text x="${M.left + plotW}" y="${(yOf(opts.reference.value) - 3).toFixed(1)}" class="reflabel">${esc(opts.reference.label)}</text>`
     : "";
 
-  const legend = opts.series
-    .map(
-      (s, i) =>
-        `<g transform="translate(${M.left + i * 110}, 30)"><rect width="9" height="9" y="-8" fill="${s.color}"/><text x="13" class="legend">${esc(s.label)}</text></g>`,
-    )
-    .join("");
+  const shown = opts.series.filter((s) => !s.hideLegend);
+  const legend =
+    shown
+      .map(
+        (s, i) =>
+          `<g transform="translate(${M.left + i * 110}, 30)"><rect width="9" height="9" y="-8" fill="${s.color}"/><text x="13" class="legend">${esc(s.label)}</text></g>`,
+      )
+      .join("") +
+    (opts.legendNote
+      ? `<text x="${M.left + shown.length * 110}" y="30" class="legend">${esc(opts.legendNote)}</text>`
+      : "");
 
-  return svg(opts.title, grid + ref + markerSvg(xOf, years, opts.marker) + lines + xlabels + legend);
+  const cursor =
+    opts.cursor !== undefined && opts.cursor >= 0 && opts.cursor < years
+      ? `<line x1="${xOf(opts.cursor).toFixed(1)}" y1="${M.top}" x2="${xOf(opts.cursor).toFixed(1)}" y2="${M.top + plotH}" class="cursorline"/>`
+      : "";
+
+  return svg(opts.title, grid + ref + markerSvg(xOf, years, opts.marker) + cursor + lines + xlabels + legend);
 }
 
 /** Stacked area (e.g., coverage mix over time). Series stack bottom-to-top. */
@@ -156,39 +177,6 @@ export function stackedArea(title: string, series: Series[], total: number, mark
     )
     .join("");
   return svg(title, areas + markerSvg(xOf, years, marker) + ax + xlabels + legend);
-}
-
-/** Categorical bar chart (e.g., a metric across income terciles). */
-export function barChart(
-  title: string,
-  bars: { label: string; value: number; color: string }[],
-  yFmt: (v: number) => string,
-  yMax?: number,
-): string {
-  const top = yMax ?? Math.max(0.0001, ...bars.map((b) => b.value)) * 1.15;
-  const yOf = (v: number) => M.top + plotH - (plotH * v) / top;
-  const bw = (plotW / bars.length) * 0.6;
-  const gap = (plotW / bars.length) * 0.4;
-  const grid = yTicks(0, top)
-    .map((t) => {
-      const y = yOf(t);
-      return `<line x1="${M.left}" y1="${y.toFixed(1)}" x2="${M.left + plotW}" y2="${y.toFixed(1)}" class="grid"/>` +
-        `<text x="${M.left - 6}" y="${(y + 3).toFixed(1)}" class="ytick">${esc(yFmt(t))}</text>`;
-    })
-    .join("");
-  const rects = bars
-    .map((b, i) => {
-      const x = M.left + gap / 2 + i * (bw + gap);
-      const y = yOf(b.value);
-      const h = M.top + plotH - y;
-      return (
-        `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" fill="${b.color}"/>` +
-        `<text x="${(x + bw / 2).toFixed(1)}" y="${(y - 4).toFixed(1)}" class="barval">${esc(yFmt(b.value))}</text>` +
-        `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 8}" class="xtick">${esc(b.label)}</text>`
-      );
-    })
-    .join("");
-  return svg(title, grid + rects);
 }
 
 /** Stacked area with an absolute (dollar) y-axis and its own auto-scaled max. */
@@ -229,9 +217,10 @@ export function stackedAreaDollars(
 
 /**
  * Iron Triangle radar: three axes (Cost / Quality / Access), each 0–1 where 1
- * is good. Plots the current package and a baseline overlay.
+ * is good. Plots the current package and the no-reform run for the same year.
  */
 export function ironTriangle(
+  title: string,
   current: { cost: number; quality: number; access: number },
   baseline: { cost: number; quality: number; access: number },
 ): string {
@@ -279,11 +268,11 @@ export function ironTriangle(
   // High contrast: baseline is a bold dashed reference outline; the current
   // package is a solid, saturated filled shape.
   const legend =
-    `<g transform="translate(8,${H - 14})"><line x1="0" y1="-4" x2="14" y2="-4" stroke="#334155" stroke-width="2.5" stroke-dasharray="4 3"/><text x="19" class="legend">Baseline</text>` +
+    `<g transform="translate(8,${H - 14})"><line x1="0" y1="-4" x2="14" y2="-4" stroke="#334155" stroke-width="2.5" stroke-dasharray="4 3"/><text x="19" class="legend">No reform</text>` +
     `<rect width="12" height="10" y="-9" x="96" fill="#e11d48" fill-opacity="0.9"/><text x="112" class="legend">This package</text></g>`;
 
   return svg(
-    "Iron Triangle",
+    title,
     rings +
       spokes +
       labels +

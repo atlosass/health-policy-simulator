@@ -43,9 +43,11 @@ To put the simulator online, run `npm run build` and upload the `web/` folder to
 | Innovation index | Medical technology, starting at 1.0 and funded by commercial revenue and provider margins |
 | Govt. social cost | Government health outlays plus the deadweight loss of raising the revenue, scaled to a US-sized population |
 
+**Iron Triangle over time.** The year bar above the charts (slider and Play button) picks a year. The triangle shows that year against the no-reform run in the same year, and the chart beside it plots the three scores (affordability, quality, access) for every year, with dashed lines for no reform and a cursor at the selected year.
+
 **Charts.** The dashed line marks the reform year and a shaded band marks any phase-in. A line stops where the thing it measures stops existing: private premiums end under single payer, and private-sector wait times end when delivery is all public.
 
-**Why?** The slider under the charts picks a year and lists what happened in it and why: the reform taking effect, coverage shifts, premium changes, mergers, entry and exit, queues, the fiscal ledger.
+**Why?** The panel under the charts follows the same selected year (it has its own copy of the slider) and lists what happened in it and why: the reform taking effect, coverage shifts, premium changes, mergers, entry and exit, queues, the fiscal ledger.
 
 **Sharing.** "Copy share link" puts the whole package (levers, timing, seed) in the URL. The same link always reproduces the same run.
 
