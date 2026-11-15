@@ -119,9 +119,11 @@ export function chooseCoverage(h: Household, ctx: ChoiceContext): ChoiceResult {
   const publicEligible =
     policy.publicEligibilityMultiple > 0 && fplMultiple <= policy.publicEligibilityMultiple;
   const load = policy.communityRating ? PARAMS.individualLoad : PARAMS.underwrittenLoad;
+  // Individual-market plans pay providers less than employer plans (narrower networks).
+  const piIndividual = pi * PARAMS.individualPriceRatio;
   const silverPremium = policy.communityRating
     ? ctx.premiums.silver
-    : expectedClaims(mu, TIERS[1]!, pi) * (1 + load);
+    : expectedClaims(mu, TIERS[1]!, piIndividual) * (1 + load);
   // The ESI firewall only bites if the offer is "affordable" (ACA rule): an
   // unaffordable offer leaves the worker subsidy-eligible.
   const firewalled =
@@ -185,7 +187,7 @@ export function chooseCoverage(h: Household, ctx: ChoiceContext): ChoiceResult {
   for (const [t, tier] of TIERS.entries()) {
     const gross = policy.communityRating
       ? ctx.premiums[tier.id]
-      : expectedClaims(mu, tier, pi) * (1 + load);
+      : expectedClaims(mu, tier, piIndividual) * (1 + load);
     const net = Math.max(0, gross - subsidy);
     options.push({
       coverage: "individual",
@@ -194,7 +196,7 @@ export function chooseCoverage(h: Household, ctx: ChoiceContext): ChoiceResult {
       premiumPaid: net,
       ce:
         net +
-        ceOopCost(mu, h.riskAversion, tier, pi) +
+        ceOopCost(mu, h.riskAversion, tier, piIndividual) +
         PARAMS.enrollHassle.individualShare * hassle +
         noise(DRAW.noiseTier + t),
     });

@@ -21,7 +21,7 @@ Other commands:
 | `npm run dev` | Build, then serve at http://localhost:5173/ |
 | `npm run build` | Compile `src/` to browser modules in `web/dist/` |
 | `npm run serve` | Serve `web/` without rebuilding |
-| `npm test` | Run the 90 regression tests (about 25 seconds) |
+| `npm test` | Run the 95 regression tests (about 25 seconds) |
 | `npm run typecheck` | Type-check without building |
 
 To put the simulator online, run `npm run build` and upload the `web/` folder to any static host (GitHub Pages, Netlify, the LMS). There is no server component.
@@ -41,7 +41,7 @@ To put the simulator online, run `npm run build` and upload the `web/` folder to
 | Population health | Mean health stock, an index from 0.2 to 1.0 (not life expectancy) |
 | Care gap | Average share of needed care that households did not receive, whether skipped for cost, rationed for lack of capacity, or lost to long waits |
 | Innovation index | Medical technology, starting at 1.0 and funded by commercial revenue and provider margins |
-| Govt. social cost | Government health outlays plus the deadweight loss of raising the revenue, scaled to a US-sized population |
+| Govt. social cost | Government health outlays plus the deadweight loss of raising the revenue, scaled to the 170 million US adults aged 26–64 |
 
 **Iron Triangle over time.** The year bar above the charts (slider and Play button) picks a year. The triangle shows that year against the no-reform run in the same year, and the chart beside it plots the three scores (affordability, quality, access) for every year, with dashed lines for no reform and a cursor at the selected year.
 
@@ -77,10 +77,11 @@ These matter when interpreting results in class.
 - **Mergers only raise prices.** The model has no merger efficiencies or quality effects, so a merger that cannot raise prices (single payer, a binding price cap) has no motive and does not happen.
 - **Household pay ignores taxes.** Employer premium contributions come out of cash wages, but the taxes that finance public coverage are not deducted from household pay; they appear only in the government ledger. Take-home pay is therefore not comparable between privately and publicly financed systems.
 - **Idle capacity is free.** Provider costs have no fixed component, so a high-margin market can carry excess capacity without its margins falling.
-- **Costs per person run low.** Health spending is scaled to start at the real 17.5% of GDP, but the dollar costs underneath are about a quarter low, so employer premiums come out near $6,600 against a real figure near $8,700. This is recorded in the calibration table as a known miss.
-- **Current law drifts.** With no reform, slow provider consolidation raises prices, and health spending rises from 17.5% of GDP to about 18–19% by year 19. Always read a reform against the "no reform" line, not against year 0.
+- **Dollar totals cover adults under 65 only.** National figures are scaled to the 170 million US adults aged 26–64, the people the model simulates. They leave out children and Medicare, so single payer shows up at about $2.4 trillion a year, not the $3 trillion or more usually quoted for everyone. Health spending as a share of GDP is scaled separately, to the familiar 17.5%.
+- **The individual market is a little too expensive.** Silver premiums come out near $8,500 against a real average near $7,300 (inside the calibration band, at its top).
+- **Current law drifts.** With no reform, slow provider consolidation raises prices, and health spending rises from 17.5% of GDP to about 19–20% by year 19. Always read a reform against the "no reform" line, not against year 0.
 - **Medicaid pays below cost in the model.** Public insurance pays 60% of commercial prices by default, less than providers' cost, so expanding it without raising the payment rate squeezes provider margins and can slow investment in capacity.
-- **Employer plan generosity barely responds to the tax exclusion.** Repeal mostly reduces small-firm offers and leaves plan richness nearly unchanged.
+- **Employer plan generosity responds only modestly to the tax exclusion.** Repeal mostly reduces small-firm offers; average plan richness falls from 82% to 79% (more at small firms).
 - **Five runs is a small sample.** The ranges show the lowest and highest of five runs, not a confidence interval. Rare events (a merger wave, a market collapse) can fall outside them.
 - **Scope.** Nonelderly adults, a single national market, no drug sector, no Medicare.
 

@@ -139,7 +139,7 @@ export const EMPLOYER_MANDATE: Policy = {
 /** Cap the ESI tax exclusion (a "Cadillac tax"-style limit) — trims generous offers and the tax expenditure, with little effect on coverage. */
 export const TAX_EXCLUSION_CAPPED: Policy = {
   ...BASELINE_POLICY,
-  taxExclusionCap: 5_000,
+  taxExclusionCap: 6_500,
 };
 
 /** Repeal the ESI tax exclusion entirely — erodes employer offers, shifting workers to other markets. */

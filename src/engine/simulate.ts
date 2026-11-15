@@ -333,8 +333,12 @@ export function runSimulation(config: SimConfig): SimResult {
       const plan = planFor(choice.coverage, choice.tier);
       const isPublic = choice.coverage === "public";
 
-      const priceHosp = isPublic ? clearH.publicPriceIndex : clearH.commercialPriceIndex;
-      const pricePhys = isPublic ? clearP.publicPriceIndex : clearP.commercialPriceIndex;
+      // Public programs pay the administered rate; individual-market plans pay a
+      // discount off the commercial price (narrower networks); employer plans
+      // and the uninsured face the commercial price.
+      const network = choice.coverage === "individual" ? PARAMS.individualPriceRatio : 1;
+      const priceHosp = isPublic ? clearH.publicPriceIndex : clearH.commercialPriceIndex * network;
+      const pricePhys = isPublic ? clearP.publicPriceIndex : clearP.commercialPriceIndex * network;
       const deliveredQHosp = rec.qHosp * clearH.deliveredFraction;
       const deliveredQPhys = rec.qPhys * clearP.deliveredFraction;
       const billHosp = deliveredQHosp * priceHosp;

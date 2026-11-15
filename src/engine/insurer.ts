@@ -28,7 +28,7 @@ export function seedPremiums(pop: Household[]): TierPremiums {
   const premiums = {} as TierPremiums;
   for (const tier of TIERS) {
     let total = 0;
-    for (const h of pop) total += expectedClaims(expectedCost(h), tier);
+    for (const h of pop) total += expectedClaims(expectedCost(h), tier, PARAMS.individualPriceRatio);
     premiums[tier.id] =
       (total / pop.length) * (1 + PARAMS.individualLoad) * PARAMS.seedPremiumUplift;
   }

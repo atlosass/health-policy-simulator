@@ -18,14 +18,20 @@ export const PARAMS = {
   povertyLine: 15_000,
 
   // ---- Health risk ----
-  /** Mean expected annual morbidity cost for a median-age, median-frailty household (nonelderly-adult realistic). */
-  baseAnnualCost: 4_700,
+  /**
+   * Mean expected annual morbidity cost for a median-age, median-frailty
+   * household. With `accidentRiskCost`, this sets the level of medical costs.
+   * Both are set so that the average employer premium for single coverage
+   * comes out near the real $8,700 (the calibration anchor); mean expected
+   * cost per adult is then about $9,700.
+   */
+  baseAnnualCost: 6_450,
   /**
    * Flat accident/injury risk component of expected cost, independent of
    * health status — the reason even the healthiest household values
    * catastrophic coverage.
    */
-  accidentRiskCost: 1_500,
+  accidentRiskCost: 2_050,
   /** Frailty dispersion (lognormal sigma). Drives the 5%-of-people-50%-of-spend skew. */
   frailtySigma: 1.15,
   /** Expected cost grows by this factor per year of age. */
@@ -63,10 +69,10 @@ export const PARAMS = {
    * stands in for loss aversion and default-following in real take-up
    * behavior.
    */
-  riskAversionMean: 2.5e-4,
+  riskAversionMean: 1.82e-4,
   riskAversionSigma: 0.5,
   /** Gumbel noise scale ($) on coverage choice — smooths discrete switching. */
-  choiceNoise: 400,
+  choiceNoise: 550,
   /** Uninsured OOP is capped at this share of income; the remainder is uncompensated care. */
   uninsuredOopIncomeCap: 0.3,
   /**
@@ -81,13 +87,13 @@ export const PARAMS = {
    * exposure term below, so that under current law about 11% of the
    * low-income third and 3% of the high-income third are uninsured.
    */
-  enrollHassle: { base: 150, max: 10_000, incomeScale: 30_000, individualShare: 0.3 },
+  enrollHassle: { base: 200, max: 13_700, incomeScale: 30_000, individualShare: 0.3 },
   /**
    * Being uninsured costs more the more you have to lose: this share of cash
    * income above `uninsuredExposureFloor` is added to the certainty-equivalent
    * cost of going uninsured (assets at risk, and coverage as a normal good).
    */
-  uninsuredIncomeExposure: 0.02,
+  uninsuredIncomeExposure: 0.014,
   uninsuredExposureFloor: 40_000,
 
   // ---- Employer-sponsored insurance (Phase 3) ----
@@ -124,11 +130,11 @@ export const PARAMS = {
    */
   esiRecruitmentValue: 0.42,
   /** Per-worker fixed administrative/compliance cost of running a plan, by firm size — the real reason the smallest firms abstain (few workers to spread it over). */
-  esiFixedCostPerWorker: { small: 2_300, medium: 400, large: 60 },
+  esiFixedCostPerWorker: { small: 3_150, medium: 550, large: 80 },
   /** Std. dev. ($) of idiosyncratic firm-level offer propensity (workforce health, management, local labor market) — smooths the extensive margin so it isn't an all-or-nothing cliff by size. */
-  esiOfferDispersion: 1_300,
+  esiOfferDispersion: 1_780,
   /** Employee share of the ESI premium (the salient take-up cost); the rest is employer-paid and comes out of wages. */
-  esiWorkerShare: 0.4,
+  esiWorkerShare: 0.3,
   /**
    * Wage pass-through: an offering firm recovers its premium contributions by
    * paying lower cash wages to its workers. Cash wages cannot be pushed below
@@ -146,6 +152,12 @@ export const PARAMS = {
   // ---- Individual market ----
   /** Individual-market administrative load under community rating. */
   individualLoad: 0.18,
+  /**
+   * Individual-market plans use narrower networks and pay providers less than
+   * employer plans do: this fraction of the commercial price. It is one reason
+   * marketplace premiums run below employer premiums in the real world.
+   */
+  individualPriceRatio: 0.85,
   /** Load when medical underwriting is allowed (screening costs, broker commissions — the pre-ACA pattern). */
   underwrittenLoad: 0.32,
   /** Year-0 premium seed uplift over the all-population average (insurers anticipate some selection). */
@@ -182,8 +194,8 @@ export const PARAMS = {
   entryMargin: 0.16,
   /** Provider blended margin below which capacity exits the market. */
   exitMargin: 0.0,
-  /** Provider blended margin below which a sector is in distress (mergers become more urgent). */
-  mergerMargin: 0.05,
+  /** Provider blended margin below which a sector is in distress (mergers become more urgent). About half the current-law margin of roughly 7%. */
+  mergerMargin: 0.035,
   /**
    * Mergers are proposed for the revenue they would bring. The annual
    * probability a sector proposes one is 1 − exp(−sensitivity × gain), where
@@ -208,8 +220,8 @@ export const PARAMS = {
   supplyAdjustRate: 0.75,
   /** Weight on this year's demand when providers update the demand they plan for (the rest is last year's expectation). */
   demandExpectationWeight: 0.5,
-  /** Providers invest fully only when the blended margin is at least this; below it investment scales down, to nothing at a zero margin. */
-  investMargin: 0.05,
+  /** Providers invest fully only when the blended margin is at least this (about half the current-law margin of roughly 7%); below it investment scales down, to nothing at a zero margin. */
+  investMargin: 0.035,
   /** Fraction of capacity removed per year per unit of margin below the exit threshold. */
   exitRate: 0.25,
   /** Capacity cannot fall below this fraction of its seeded baseline (providers are partly fixed assets). */
@@ -262,7 +274,7 @@ export const PARAMS = {
   /** Public/spillover R&D floor as a share of the reference level — innovation continues even with no commercial surplus. */
   innovationRdFloor: 0.3,
   /** Reference per-capita commercial R&D signal (baseline system = intensity 1.0). Calibrated to the baseline. */
-  innovationRdReference: 6800,
+  innovationRdReference: 8230,
   /** How strongly provider profitability amplifies R&D funding. */
   innovationMarginBonus: 2.0,
   /** Clamp on R&D intensity (keeps innovation growth bounded). */
@@ -283,20 +295,20 @@ export const PARAMS = {
   /** GDP proxy = aggregate household income / laborShareOfGdp (tuned so GDP per capita ≈ the US headline ~$83k). */
   laborShareOfGdp: 0.75,
   /**
-   * A calibration constant, not a demographic estimate. The sim models
-   * nonelderly adults only, and its medical costs per adult run about 25%
-   * below the real figure, so the spending share of GDP it produces directly
-   * is too low. This factor scales the displayed share so that the first five
-   * years of a current-law run average 17.5% of GDP (measured over 20 seeds;
-   * see calibration.ts). Everyone else's spending is assumed to move in
-   * proportion.
+   * A calibration constant. The sim models adults aged 26–64 only, so the
+   * spending share of GDP it produces directly (about 12%) leaves out children,
+   * people 65 and over, long-term care and public health. This factor scales
+   * the displayed share so that the first five years of a current-law run
+   * average 17.5% of GDP (measured over 20 seeds; see calibration.ts). That
+   * other spending is assumed to move in proportion.
    */
-  nheDisplayScale: 1.95,
+  nheDisplayScale: 1.47,
   /**
-   * Population used to scale the simulated sample's dollar totals to a
-   * national figure for display (dashboard tiles and narrative text use the
-   * same scaling). A legibility device: the sample is nonelderly adults, so
-   * these are order-of-magnitude national numbers, not budget estimates.
+   * Population used to scale the simulated sample's dollar totals to national
+   * figures (dashboard tiles and narrative text use the same scaling): the
+   * roughly 170 million US adults aged 26–64, the people the model simulates.
+   * National dollar figures therefore cover adults under 65 only; they leave
+   * out children and Medicare.
    */
-  displayPopulation: 330_000_000,
+  displayPopulation: 170_000_000,
 } as const;

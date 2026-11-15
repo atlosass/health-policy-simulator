@@ -23,7 +23,7 @@ export interface Metric {
 
 const households = (y: YearResult): number => y.coverage.esi + y.coverage.individual + y.coverage.public + y.coverage.uninsured;
 
-/** Sample dollars to dollars for a US-sized population, in trillions. */
+/** Sample dollars to national dollars (the 170 million US adults aged 26–64), in trillions. */
 const nationalTrillions = (y: YearResult, sampleDollars: number): number =>
   (sampleDollars * PARAMS.displayPopulation) / households(y) / 1e12;
 
@@ -95,7 +95,7 @@ export const METRICS: Metric[] = [
     fmtDelta: (d) => money(d),
     better: "lower",
     epsilon: 0.02,
-    help: "Annual government health outlays (subsidies, public insurance, direct provision, the ESI tax break) plus the deadweight loss of raising that revenue, scaled to a US-sized population.",
+    help: "Annual government health outlays (subsidies, public insurance, direct provision, the ESI tax break) plus the deadweight loss of raising that revenue. Scaled to the 170 million US adults aged 26–64, the people the model simulates; it leaves out children and Medicare.",
   },
   {
     key: "longestWait",
