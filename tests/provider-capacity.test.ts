@@ -8,44 +8,46 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  runSimulation,
-  defaultConfig,
+  PARAMS,
   BASELINE_POLICY,
   AGGRESSIVE_PRICE_CAPS,
   SINGLE_PAYER_ADEQUATE,
   SINGLE_PAYER_LOW_RATES,
 } from "../src/engine/index.ts";
-
-const baseline = runSimulation(defaultConfig(BASELINE_POLICY, 42, 20));
-const caps = runSimulation(defaultConfig(AGGRESSIVE_PRICE_CAPS, 42, 20));
+import { eachSeed, steady, pct } from "./helpers.ts";
 
 test("aggressive price caps cut spending in the short run", () => {
-  assert.ok(
-    caps.years[1]!.spending.nheShareOfGdp < baseline.years[1]!.spending.nheShareOfGdp,
-    "price caps should lower health spending initially",
-  );
+  eachSeed((seed) => {
+    const caps = steady(AGGRESSIVE_PRICE_CAPS, seed);
+    const baseline = steady(BASELINE_POLICY, seed);
+    assert.ok(caps.years[1]!.spending.nheShareOfGdp < baseline.years[1]!.spending.nheShareOfGdp, "price caps should lower health spending initially");
+  });
 });
 
 test("but below-cost caps drive capacity exit and rising waits over time", () => {
-  const earlyWait = caps.years[1]!.providers.hospital.waitWeeks;
-  const lateWait = caps.years.at(-1)!.providers.hospital.waitWeeks;
-  assert.ok(lateWait > 3 * earlyWait, `hospital waits went ${earlyWait.toFixed(1)}w -> ${lateWait.toFixed(1)}w`);
-  const exit = caps.years.flatMap((y) => y.events).find((e) => e.type === "provider-exit");
-  assert.ok(exit, "expected a provider-exit event under below-cost price caps");
+  eachSeed((seed) => {
+    const caps = steady(AGGRESSIVE_PRICE_CAPS, seed);
+    const earlyWait = caps.years[1]!.providers.hospital.waitWeeks;
+    const lateWait = caps.years.at(-1)!.providers.hospital.waitWeeks;
+    assert.ok(lateWait > 3 * earlyWait, `hospital waits went ${earlyWait.toFixed(1)}w -> ${lateWait.toFixed(1)}w`);
+    const exit = caps.years.flatMap((y) => y.events).find((e) => e.type === "provider-exit");
+    assert.ok(exit, "expected a provider-exit event under below-cost price caps");
+  });
 });
 
 test("coverage without access: insured, but the care gap climbs sharply under the caps", () => {
-  const last = caps.years.at(-1)!;
-  assert.ok(last.insuredRate > 0.82, "coverage stays high under the caps");
-  assert.ok(
-    last.health.careGap > baseline.years.at(-1)!.health.careGap + 0.2,
-    `care gap should rise sharply despite high coverage (caps ${(last.health.careGap * 100).toFixed(0)}% vs baseline ${(baseline.years.at(-1)!.health.careGap * 100).toFixed(0)}%)`,
-  );
+  eachSeed((seed) => {
+    const last = steady(AGGRESSIVE_PRICE_CAPS, seed).years.at(-1)!;
+    const base = steady(BASELINE_POLICY, seed).years.at(-1)!;
+    assert.ok(last.insuredRate > 0.82, "coverage stays high under the caps");
+    assert.ok(
+      last.health.careGap > base.health.careGap + 0.2,
+      `care gap should rise sharply despite high coverage (caps ${pct(last.health.careGap)} vs baseline ${pct(base.health.careGap)})`,
+    );
+  });
 });
 
-test("entry lags differ: hospital capacity (3y) recovers faster than physician (7y)", async () => {
-  // Sanity on the configured lags driving the pipeline.
-  const { PARAMS } = await import("../src/engine/params.ts");
+test("entry lags differ: hospital capacity (3y) arrives sooner than physician (7y)", () => {
   assert.ok(
     PARAMS.providerSectors.physician.entryLagYears > PARAMS.providerSectors.hospital.entryLagYears,
     "physician training lag should exceed hospital construction lag",
@@ -53,22 +55,23 @@ test("entry lags differ: hospital capacity (3y) recovers faster than physician (
 });
 
 test("single payer at adequate rates: universal coverage, modest waits, large tax cost", () => {
-  const sp = runSimulation(defaultConfig(SINGLE_PAYER_ADEQUATE, 42, 20));
-  const last = sp.years.at(-1)!;
-  assert.equal(last.coverage.uninsured, 0, "single payer covers everyone");
-  assert.ok(last.providers.hospital.waitWeeks < 8, `hospital waits ${last.providers.hospital.waitWeeks.toFixed(1)}w should stay modest at adequate rates`);
-  assert.ok(
-    last.government.deadweightLoss > baseline.years.at(-1)!.government.deadweightLoss * 2,
-    "financing universal public coverage carries a much larger deadweight cost",
-  );
+  eachSeed((seed) => {
+    const last = steady(SINGLE_PAYER_ADEQUATE, seed).years.at(-1)!;
+    const base = steady(BASELINE_POLICY, seed).years.at(-1)!;
+    assert.equal(last.coverage.uninsured, 0, "single payer covers everyone");
+    assert.ok(last.providers.hospital.waitWeeks < 8, `hospital waits ${last.providers.hospital.waitWeeks.toFixed(1)}w should stay modest at adequate rates`);
+    assert.ok(last.government.deadweightLoss > base.government.deadweightLoss * 2, "financing universal public coverage carries a much larger deadweight cost");
+  });
 });
 
 test("single payer at low rates rations by queue (waits far exceed the adequate-rate case)", () => {
-  const adequate = runSimulation(defaultConfig(SINGLE_PAYER_ADEQUATE, 42, 20));
-  const low = runSimulation(defaultConfig(SINGLE_PAYER_LOW_RATES, 42, 20));
-  assert.equal(low.years.at(-1)!.coverage.uninsured, 0, "still universal coverage");
-  assert.ok(
-    low.years.at(-1)!.providers.hospital.waitWeeks > 3 * adequate.years.at(-1)!.providers.hospital.waitWeeks,
-    "underpaying providers should produce far longer queues than paying them adequately",
-  );
+  eachSeed((seed) => {
+    const adequate = steady(SINGLE_PAYER_ADEQUATE, seed).years.at(-1)!;
+    const low = steady(SINGLE_PAYER_LOW_RATES, seed).years.at(-1)!;
+    assert.equal(low.coverage.uninsured, 0, "still universal coverage");
+    assert.ok(
+      low.providers.hospital.waitWeeks > 3 * adequate.providers.hospital.waitWeeks,
+      "underpaying providers should produce far longer queues than paying them adequately",
+    );
+  });
 });

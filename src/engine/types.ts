@@ -41,8 +41,8 @@ export interface Household {
   firmOfferShock: number;
   /** This year's employer ESI offer, or null if the firm does not offer. */
   esiOffer: EsiOffer | null;
-  /** Idiosyncratic hassle/stigma cost of enrolling in public coverage ($/yr). */
-  publicHassleCost: number;
+  /** Persistent draw in (0, 1): how much trouble this household has signing up for coverage on its own (see `enrollmentHassle`). */
+  hassleDraw: number;
   /** Current-year coverage state. */
   coverage: CoverageKind;
   tier: TierId | null;

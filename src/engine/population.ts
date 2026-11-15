@@ -65,7 +65,7 @@ function drawHousehold(rng: Rng, id: number, age: number): Household {
     firmAdminLoad: firm.adminLoad,
     firmOfferShock: idShock(id),
     esiOffer: null,
-    publicHassleCost: 150 + 1_200 * Math.pow(rng(), 2),
+    hassleDraw: rng(),
     coverage: "uninsured",
     tier: null,
   };

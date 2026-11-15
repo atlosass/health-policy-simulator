@@ -69,6 +69,26 @@ export const PARAMS = {
   choiceNoise: 400,
   /** Uninsured OOP is capped at this share of income; the remainder is uncompensated care. */
   uninsuredOopIncomeCap: 0.3,
+  /**
+   * Enrollment hassle: the dollar-equivalent burden of signing up for coverage
+   * on your own (forms, renewals, churn, not knowing you qualify). It is
+   * `base + max × draw³ × exp(−cash income ÷ incomeScale)`: a persistent
+   * household trait, skewed so most households find it minor and a minority
+   * find it prohibitive, and heaviest at low incomes. Public coverage carries
+   * all of it; individual-market plans carry `individualShare` of it; employer
+   * coverage, where the firm does the paperwork, carries none. This is why
+   * some people eligible for free coverage stay uninsured. Tuned, with the
+   * exposure term below, so that under current law about 11% of the
+   * low-income third and 3% of the high-income third are uninsured.
+   */
+  enrollHassle: { base: 150, max: 10_000, incomeScale: 30_000, individualShare: 0.3 },
+  /**
+   * Being uninsured costs more the more you have to lose: this share of cash
+   * income above `uninsuredExposureFloor` is added to the certainty-equivalent
+   * cost of going uninsured (assets at risk, and coverage as a normal good).
+   */
+  uninsuredIncomeExposure: 0.02,
+  uninsuredExposureFloor: 40_000,
 
   // ---- Employer-sponsored insurance (Phase 3) ----
   /** Stylized marginal income-tax rate by bracket (used for the ESI tax exclusion). */
@@ -263,12 +283,15 @@ export const PARAMS = {
   /** GDP proxy = aggregate household income / laborShareOfGdp (tuned so GDP per capita ≈ the US headline ~$83k). */
   laborShareOfGdp: 0.75,
   /**
-   * The sim models nonelderly adults only; the displayed NHE-share-of-GDP is
-   * extrapolated to the full population (elderly + children spending assumed
-   * to move proportionally) so the headline matches the familiar ~17.5%.
-   * Documented on the model-assumptions page.
+   * A calibration constant, not a demographic estimate. The sim models
+   * nonelderly adults only, and its medical costs per adult run about 25%
+   * below the real figure, so the spending share of GDP it produces directly
+   * is too low. This factor scales the displayed share so that the first five
+   * years of a current-law run average 17.5% of GDP (measured over 20 seeds;
+   * see calibration.ts). Everyone else's spending is assumed to move in
+   * proportion.
    */
-  nheDisplayScale: 1.75,
+  nheDisplayScale: 1.95,
   /**
    * Population used to scale the simulated sample's dollar totals to a
    * national figure for display (dashboard tiles and narrative text use the

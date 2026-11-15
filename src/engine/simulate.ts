@@ -1,6 +1,6 @@
 import { PARAMS } from "./params.ts";
 import { PUBLIC_PLAN, TIER_BY_ID, oopFor, type PlanTier, type TierId } from "./plans.ts";
-import { mulberry32, categorical } from "./rng.ts";
+import { mulberry32, hashUniform, categoricalFrom, DRAW } from "./rng.ts";
 import { generatePopulation, agePopulation, expectedCost } from "./population.ts";
 import { chooseCoverage, type ChoiceResult } from "./choice.ts";
 import { realizedSpend, adequateSpend } from "./utilization.ts";
@@ -96,9 +96,14 @@ interface HouseholdYear {
 }
 
 export function runSimulation(config: SimConfig): SimResult {
+  // Three independent sources of randomness, so nothing a policy does can
+  // reshuffle anyone's luck:
+  //  • `rng` builds the population and its yearly new entrants (who ages out
+  //    never depends on policy);
+  //  • each household's health shock and choice noise are looked up by
+  //    (seed, household, year), see rng.ts;
+  //  • the provider market has its own stream with a fixed number of draws a year.
   const rng = mulberry32(config.seed);
-  // Merger proposals and reviews draw from their own stream, a fixed number of
-  // draws per year, so the provider market never shifts any household's draws.
   const providerRng = mulberry32((config.seed ^ 0x9e3779b9) >>> 0);
   const pop = generatePopulation(rng, config.populationSize);
   let nextId = config.populationSize;
@@ -109,6 +114,8 @@ export function runSimulation(config: SimConfig): SimResult {
   let prevPriceIndex = 1; // households' adaptive expectation of provider prices
   let prevEsiTakeup: number = PARAMS.esiInitialTakeup; // share of offered workers who enrolled last year
   let prevWageOffset: number | null = null; // last wage offset reported in a narrative event
+  let prevOfferRate: number | null = null;
+  let prevRdIntensity: number | null = null; // last R&D intensity reported in a narrative event
   const seedSilver = premiums.silver;
 
   const providers = createProviderState();
@@ -204,14 +211,16 @@ export function runSimulation(config: SimConfig): SimResult {
               premiums,
               policy,
               expectedPriceIndex: prevPriceIndex,
+              seed: config.seed,
+              year,
             },
-            rng,
           );
       h.coverage = choice.coverage;
       h.tier = choice.tier;
 
       const mu = expectedCost(h);
-      const shockMult = PARAMS.shockMults[categorical(rng, PARAMS.shockProbs)]!;
+      const shockMult =
+        PARAMS.shockMults[categoricalFrom(hashUniform(config.seed, h.id, year, DRAW.shock), PARAMS.shockProbs)]!;
 
       // Public-program enrollees and the uninsured use the government delivery
       // system where one exists (the uninsured thereby gain real access). Care
@@ -519,6 +528,45 @@ export function runSimulation(config: SimConfig): SimResult {
           `an adverse-selection death spiral.`,
       });
     }
+    // Employer offers: report a move of three points or more.
+    const offerRate = offeredCount / pop.length;
+    if (prevOfferRate !== null && Math.abs(offerRate - prevOfferRate) >= 0.03) {
+      const fell = offerRate < prevOfferRate;
+      events.push({
+        year,
+        module: "employer",
+        type: "offer-shift",
+        data: { offerRatePct: pct(offerRate), previousPct: pct(prevOfferRate) },
+        narrative: policy.singlePayer
+          ? `Employer coverage ended: under single payer there is nothing for firms to offer.`
+          : `The share of workers offered employer coverage ${fell ? "fell" : "rose"} from ${pct(prevOfferRate)}% to ${pct(offerRate)}%` +
+            (policy.employerMandate && !fell
+              ? `, because the employer mandate requires every firm to offer.`
+              : fell
+                ? `: for more firms, mostly small ones, the value of offering no longer covers its cost.`
+                : `: offering now pays for more firms.`),
+      });
+    }
+    prevOfferRate = offerRate;
+
+    // Innovation: report a move of 15% or more in R&D intensity.
+    if (prevRdIntensity === null) prevRdIntensity = rdIntensity;
+    else if (Math.abs(rdIntensity / prevRdIntensity - 1) >= 0.15) {
+      const fell = rdIntensity < prevRdIntensity;
+      events.push({
+        year,
+        module: "market",
+        type: "innovation-shift",
+        data: { rdIntensity: Math.round(rdIntensity * 100) / 100, previous: Math.round(prevRdIntensity * 100) / 100 },
+        narrative:
+          `R&D intensity ${fell ? "fell" : "rose"} from ${prevRdIntensity.toFixed(2)}× to ${rdIntensity.toFixed(2)}×. ` +
+          (commercialSpend <= 0
+            ? `With no commercial revenue, only the public and spillover floor still funds new treatments, so the innovation index grows more slowly from here.`
+            : `It tracks commercial revenue and provider margins, which ${fell ? "shrank" : "grew"}; the innovation index will grow ${fell ? "more slowly" : "faster"}.`),
+      });
+      prevRdIntensity = rdIntensity;
+    }
+
     // Wage pass-through: say so in the first year, when it moves by 5% or
     // more, and when employer coverage ends.
     const wageOffsetPerOffered = offeredCount > 0 ? wageOffsetTotal / offeredCount : 0;
@@ -644,7 +692,7 @@ export function runSimulation(config: SimConfig): SimResult {
         rdIntensity,
       },
       employer: {
-        offerRate: offeredCount / pop.length,
+        offerRate,
         avgPremium: offeredCount > 0 ? offeredPremiumTotal / offeredCount : 0,
         avgActuarialValue: offeredCount > 0 ? offeredAvTotal / offeredCount : 0,
         employeeSharePerEnrollee: coverage.esi > 0 ? esiWorkerCostTotal / coverage.esi : 0,

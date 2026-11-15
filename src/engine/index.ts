@@ -2,6 +2,8 @@ export { runSimulation } from "./simulate.ts";
 export { PARAMS } from "./params.ts";
 export { TIERS, TIER_BY_ID, PUBLIC_PLAN } from "./plans.ts";
 export { policyForYear, describeChanges } from "./reform.ts";
+export { CALIBRATION_TARGETS, measureCalibration } from "./calibration.ts";
+export type { CalibrationTarget, CalibrationRow } from "./calibration.ts";
 export type * from "./types.ts";
 export type { TierId, PlanTier } from "./plans.ts";
 import { PARAMS } from "./params.ts";

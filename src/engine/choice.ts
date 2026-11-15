@@ -1,6 +1,6 @@
 import { PARAMS } from "./params.ts";
 import { PUBLIC_PLAN, TIERS, TIER_BY_ID, oopFor, type PlanTier, type TierId } from "./plans.ts";
-import { gumbel, type Rng } from "./rng.ts";
+import { DRAW, gumbelFrom, hashUniform } from "./rng.ts";
 import { expectedCost } from "./population.ts";
 import { realizedSpend, expectedForgoneCare } from "./utilization.ts";
 import type { Household, Policy, TierPremiums } from "./types.ts";
@@ -75,11 +75,20 @@ export function requiredContribution(income: number): number {
   return 0.085 * t * income;
 }
 
+/** Dollar-equivalent burden of enrolling in coverage on one's own this year (see PARAMS.enrollHassle). */
+export function enrollmentHassle(h: Household): number {
+  const { base, max, incomeScale } = PARAMS.enrollHassle;
+  return base + max * h.hassleDraw ** 3 * Math.exp(-h.cashIncome / incomeScale);
+}
+
 export interface ChoiceContext {
   premiums: TierPremiums; // community-rated posted premiums
   policy: Policy;
   /** Last year's blended commercial price index — households' adaptive expectation of out-of-pocket costs. */
   expectedPriceIndex: number;
+  /** Run seed and year: with the household id, they pick out this household's choice noise for the year. */
+  seed: number;
+  year: number;
 }
 
 export interface ChoiceResult {
@@ -93,9 +102,13 @@ export interface ChoiceResult {
 /**
  * Household coverage choice: minimize certainty-equivalent cost across the
  * available options, with Gumbel noise for smooth (logit-style) switching.
+ * Each option has its own noise draw for this household and year, the same
+ * whichever other options happen to be available.
  */
-export function chooseCoverage(h: Household, ctx: ChoiceContext, rng: Rng): ChoiceResult {
+export function chooseCoverage(h: Household, ctx: ChoiceContext): ChoiceResult {
   const { policy, expectedPriceIndex: pi } = ctx;
+  const noise = (purpose: number): number =>
+    gumbelFrom(hashUniform(ctx.seed, h.id, ctx.year, purpose), PARAMS.choiceNoise);
   const mu = expectedCost(h);
   // Eligibility and affordability rules see cash wages: employer premium
   // contributions are not counted as income (as with MAGI).
@@ -122,6 +135,8 @@ export function chooseCoverage(h: Household, ctx: ChoiceContext, rng: Rng): Choi
     ? Math.max(0, silverPremium - requiredContribution(h.cashIncome))
     : 0;
 
+  const hassle = enrollmentHassle(h);
+
   type Option = ChoiceResult & { ce: number };
   const options: Option[] = [];
 
@@ -133,7 +148,8 @@ export function chooseCoverage(h: Household, ctx: ChoiceContext, rng: Rng): Choi
     premiumPaid: 0,
     ce:
       ceUninsured(mu, h.riskAversion, h.cashIncome, policy.mandatePenalty, pi) +
-      gumbel(rng, PARAMS.choiceNoise),
+      PARAMS.uninsuredIncomeExposure * Math.max(0, h.cashIncome - PARAMS.uninsuredExposureFloor) +
+      noise(DRAW.noiseUninsured),
   });
 
   // Employer plan: the worker bears the premium net of the tax subsidy (via
@@ -150,7 +166,7 @@ export function chooseCoverage(h: Household, ctx: ChoiceContext, rng: Rng): Choi
         h.esiOffer.workerCost +
         ceOopCost(mu, h.riskAversion, plan, pi) -
         PARAMS.esiTakeupBonus +
-        gumbel(rng, PARAMS.choiceNoise),
+        noise(DRAW.noiseEsi),
     });
   }
 
@@ -161,12 +177,12 @@ export function chooseCoverage(h: Household, ctx: ChoiceContext, rng: Rng): Choi
       tier: null,
       subsidyUsed: 0,
       premiumPaid: 0,
-      ce: ceOopCost(mu, h.riskAversion, PUBLIC_PLAN, policy.publicPriceRatio) + h.publicHassleCost + gumbel(rng, PARAMS.choiceNoise),
+      ce: ceOopCost(mu, h.riskAversion, PUBLIC_PLAN, policy.publicPriceRatio) + hassle + noise(DRAW.noisePublic),
     });
   }
 
   // Individual market, four tiers.
-  for (const tier of TIERS) {
+  for (const [t, tier] of TIERS.entries()) {
     const gross = policy.communityRating
       ? ctx.premiums[tier.id]
       : expectedClaims(mu, tier, pi) * (1 + load);
@@ -176,7 +192,11 @@ export function chooseCoverage(h: Household, ctx: ChoiceContext, rng: Rng): Choi
       tier: tier.id,
       subsidyUsed: Math.min(subsidy, gross),
       premiumPaid: net,
-      ce: net + ceOopCost(mu, h.riskAversion, tier, pi) + gumbel(rng, PARAMS.choiceNoise),
+      ce:
+        net +
+        ceOopCost(mu, h.riskAversion, tier, pi) +
+        PARAMS.enrollHassle.individualShare * hassle +
+        noise(DRAW.noiseTier + t),
     });
   }
 
