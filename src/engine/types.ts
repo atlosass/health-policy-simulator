@@ -39,10 +39,7 @@ export interface Household {
   tier: TierId | null;
 }
 
-/**
- * Student-facing policy package (Phase 1 subset — provider and employer
- * levers arrive in Phases 2-3).
- */
+/** Student-facing policy package: every lever the simulator exposes. */
 export interface Policy {
   /** Community rating on the individual market (vs. full medical underwriting). */
   communityRating: boolean;
@@ -101,8 +98,21 @@ export interface Policy {
 export interface SimConfig {
   seed: number;
   populationSize: number;
+  /** Total simulated years, including any years before the reform. */
   years: number;
+  /** The reform package under study. */
   policy: Policy;
+  /**
+   * Policy in force before the reform (normally current law). When set, the run
+   * starts under it — provider capacity and premiums settle to that system —
+   * and `policy` takes over from `reformYear`. When omitted, `policy` applies
+   * from year 0 (steady-state mode).
+   */
+  priorPolicy?: Policy;
+  /** Year index in which the reform begins. Only meaningful with `priorPolicy`. Default 0. */
+  reformYear?: number;
+  /** Years over which the reform phases in (see `policyForYear`). Default 0 = all at once. */
+  phaseInYears?: number;
 }
 
 /** Premiums posted for the year, by individual-market tier (community-rated). */
@@ -110,7 +120,7 @@ export type TierPremiums = Record<TierId, number>;
 
 export interface ExplanationEvent {
   year: number;
-  module: "insurer" | "coverage" | "government" | "market" | "provider";
+  module: "insurer" | "coverage" | "government" | "market" | "provider" | "policy";
   type: string;
   /** Structured drivers backing the narrative — feeds the drill-down UI. */
   data: Record<string, number | string>;
@@ -126,6 +136,10 @@ export interface CoverageCounts {
 
 export interface YearResult {
   year: number;
+  /** The policy actually in force this year (differs from the reform package before and during a phase-in). */
+  policy: Policy;
+  /** 0 before the reform, between 0 and 1 during a phase-in, 1 once fully in force. */
+  reformProgress: number;
   coverage: CoverageCounts;
   insuredRate: number;
   /** Uninsured rate by income tercile (low/mid/high) — distributional lens. */
@@ -164,7 +178,7 @@ export interface YearResult {
     waitWeeks: number;
     deliveredFraction: number;
   } | null;
-  /** Employer-market state for the year. */
+  /** Employer-market state for the year. All zero under single payer, where there is no employer coverage. */
   employer: {
     /** Share of all workers who receive an ESI offer. */
     offerRate: number;
@@ -177,7 +191,12 @@ export interface YearResult {
   };
   health: {
     meanHealthStock: number;
-    unmetNeedRate: number;
+    /**
+     * Average share of needed care that households did not receive (0–1):
+     * care skipped because of cost-sharing or being uninsured, care rationed
+     * when demand exceeds capacity, and the access lost to waiting.
+     */
+    careGap: number;
   };
   /** Emergent medical-technology index (1.0 = start) and the R&D intensity funding it this year. */
   innovation: {
@@ -194,6 +213,8 @@ export interface YearResult {
 
 /** Observable provider-sector state for a year — feeds the market-structure dashboard. */
 export interface SectorSnapshot {
+  /** Whether any patients used this private sector this year (false when all care moved to a public delivery system). */
+  active: boolean;
   /** Number of competing firms (continuous; mergers and entry/exit move it). */
   firms: number;
   /** Herfindahl–Hirschman Index (10000/firms under the symmetric-firm stylization). */
@@ -202,8 +223,10 @@ export interface SectorSnapshot {
   capacity: number;
   /** Realized demand/capacity this year. */
   utilization: number;
-  /** Commercial price index relative to the baseline (1.0). */
+  /** Commercial price index relative to the baseline (1.0). What private insurers are charged; nobody pays it under single payer. */
   commercialPriceIndex: number;
+  /** Average price providers actually collected per unit of care, across all payers (0 when inactive). */
+  avgPricePaid: number;
   /** Mean wait time experienced this year (weeks). */
   waitWeeks: number;
   /** Blended provider operating margin this year. */

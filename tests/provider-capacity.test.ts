@@ -34,12 +34,12 @@ test("but below-cost caps drive capacity exit and rising waits over time", () =>
   assert.ok(exit, "expected a provider-exit event under below-cost price caps");
 });
 
-test("coverage without access: insured but unmet need climbs sharply under the caps", () => {
+test("coverage without access: insured, but the care gap climbs sharply under the caps", () => {
   const last = caps.years.at(-1)!;
   assert.ok(last.insuredRate > 0.82, "coverage stays high under the caps");
   assert.ok(
-    last.health.unmetNeedRate > baseline.years.at(-1)!.health.unmetNeedRate + 0.2,
-    "unmet need should rise sharply despite high coverage",
+    last.health.careGap > baseline.years.at(-1)!.health.careGap + 0.2,
+    `care gap should rise sharply despite high coverage (caps ${(last.health.careGap * 100).toFixed(0)}% vs baseline ${(baseline.years.at(-1)!.health.careGap * 100).toFixed(0)}%)`,
   );
 });
 

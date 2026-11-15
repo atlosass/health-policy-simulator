@@ -1,6 +1,7 @@
 export { runSimulation } from "./simulate.ts";
 export { PARAMS } from "./params.ts";
-export { TIERS, TIER_BY_ID, PUBLIC_PLAN, ESI_TIER } from "./plans.ts";
+export { TIERS, TIER_BY_ID, PUBLIC_PLAN } from "./plans.ts";
+export { policyForYear, describeChanges } from "./reform.ts";
 export type * from "./types.ts";
 export type { TierId, PlanTier } from "./plans.ts";
 import { PARAMS } from "./params.ts";
@@ -104,18 +105,27 @@ export const SAFETY_NET_CLINICS: Policy = {
   publicProvisionLevel: 0.35,
 };
 
-/** NHS-style: single-payer public insurance AND public delivery, well funded (capacity above induced demand) → universal coverage, modest waits, large tax bill. */
+/**
+ * NHS-style: single-payer public insurance AND public delivery, well funded.
+ * Care that is free at the point of use raises demand roughly 15–20% above
+ * today's, so "well funded" means capacity of about 1.35× today's total demand
+ * — enough to run near the usual 85–90% utilization.
+ */
 export const NHS_WELL_FUNDED: Policy = {
   ...BASELINE_POLICY,
   singlePayer: true,
-  publicProvisionLevel: 1.15,
+  publicProvisionLevel: 1.35,
 };
 
-/** NHS-style but underfunded: public delivery capacity well below demand → universal coverage with long queues (the classic critique). */
+/**
+ * NHS-style but underfunded: capacity roughly equal to today's demand, which
+ * is not enough once care is free → universal coverage with long queues that
+ * worsen as delayed care erodes health (the classic critique).
+ */
 export const NHS_UNDERFUNDED: Policy = {
   ...BASELINE_POLICY,
   singlePayer: true,
-  publicProvisionLevel: 0.75,
+  publicProvisionLevel: 0.95,
 };
 
 /** Employer mandate on top of the baseline — pushes offer rates up, but premiums come out of wages. */
@@ -136,6 +146,28 @@ export const TAX_EXCLUSION_REPEALED: Policy = {
   taxExclusionCap: 0,
 };
 
+/** Steady-state run: the policy applies from year 0 and the system starts already adapted to it. */
 export function defaultConfig(policy: Policy, seed = 42, years = 15): SimConfig {
   return { seed, populationSize: 10_000, years, policy };
+}
+
+/**
+ * Reform run: the system spends `reformYear` years under current law
+ * (BASELINE_POLICY), so provider capacity and premiums reflect today's system,
+ * and then the reform arrives — optionally phased in. This is the mode the web
+ * app uses, because it shows what a reform does to an existing system.
+ */
+export function reformConfig(
+  policy: Policy,
+  opts: { seed?: number; populationSize?: number; years?: number; reformYear?: number; phaseInYears?: number } = {},
+): SimConfig {
+  return {
+    seed: opts.seed ?? 42,
+    populationSize: opts.populationSize ?? 10_000,
+    years: opts.years ?? 20,
+    policy,
+    priorPolicy: BASELINE_POLICY,
+    reformYear: opts.reformYear ?? 5,
+    phaseInYears: opts.phaseInYears ?? 0,
+  };
 }

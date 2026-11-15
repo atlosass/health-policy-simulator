@@ -127,8 +127,6 @@ export const PARAMS = {
   maxPremiumGrowth: 0.5,
 
   // ---- Public sector ----
-  /** Take-up among the eligible (stigma/awareness frictions). */
-  publicTakeup: 0.85,
   /** Marginal cost of public funds: each $1 of revenue costs society $1.30. */
   marginalCostOfFunds: 1.3,
   /** Public program admin load (lower than private). */
@@ -225,8 +223,6 @@ export const PARAMS = {
   unmetNeedHealthPenalty: 0.05,
   /** Recovery toward full stock when care is adequate. */
   healthRecovery: 0.01,
-  /** Unmet-need gap above which a household counts as having unmet need. */
-  unmetNeedThreshold: 0.15,
 
   // ---- Economy scale ----
   /** GDP proxy = aggregate household income / laborShareOfGdp (tuned so GDP per capita ≈ the US headline ~$83k). */
@@ -238,4 +234,11 @@ export const PARAMS = {
    * Documented on the model-assumptions page.
    */
   nheDisplayScale: 1.75,
+  /**
+   * Population used to scale the simulated sample's dollar totals to a
+   * national figure for display (dashboard tiles and narrative text use the
+   * same scaling). A legibility device: the sample is nonelderly adults, so
+   * these are order-of-magnitude national numbers, not budget estimates.
+   */
+  displayPopulation: 330_000_000,
 } as const;

@@ -1,7 +1,7 @@
-/** Explore government direct-provision scenarios (VA/NHS-style public delivery). */
+/** Explore government direct-provision scenarios (VA/NHS-style). Reform in year 5; reads year 10. */
 import {
   runSimulation,
-  defaultConfig,
+  reformConfig,
   BASELINE_POLICY,
   SAFETY_NET_CLINICS,
   SINGLE_PAYER_ADEQUATE,
@@ -11,13 +11,13 @@ import {
 import type { Policy } from "../src/engine/index.ts";
 
 function show(name: string, policy: Policy) {
-  const r = runSimulation(defaultConfig(policy, 42, 15));
+  const r = runSimulation(reformConfig(policy, { years: 15 }));
   const y = r.years[10]!;
   const pp = y.publicProvision;
   console.log(`\n=== ${name} ===`);
   console.log(
     `insured ${(y.insuredRate * 100).toFixed(1)}%  uninsured ${y.coverage.uninsured}  ` +
-      `NHE/GDP ${(y.spending.nheShareOfGdp * 100).toFixed(1)}%  unmet ${(y.health.unmetNeedRate * 100).toFixed(1)}%  ` +
+      `NHE/GDP ${(y.spending.nheShareOfGdp * 100).toFixed(1)}%  care gap ${(y.health.careGap * 100).toFixed(1)}%  ` +
       `health ${y.health.meanHealthStock.toFixed(3)}`,
   );
   console.log(

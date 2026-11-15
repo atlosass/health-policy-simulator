@@ -17,15 +17,29 @@ export interface Series {
   values: number[]; // indexed by year
 }
 
+/** A line series that may have gaps: null marks a year in which the quantity does not exist. */
+export interface GapSeries {
+  label: string;
+  color: string;
+  values: (number | null)[];
+}
+
+/** Where the reform begins on the year axis, and how many years it takes to phase in. */
+export interface ReformMarker {
+  start: number;
+  phaseIn: number;
+}
+
 interface AxisChartOpts {
   title: string;
-  series: Series[];
+  series: GapSeries[];
   yMax?: number;
   yMin?: number;
   /** Format a y value for the axis labels. */
   yFmt: (v: number) => string;
   /** Optional horizontal reference line (e.g., a target). */
   reference?: { value: number; label: string };
+  marker?: ReformMarker;
 }
 
 function yTicks(min: number, max: number, n = 4): number[] {
@@ -34,10 +48,30 @@ function yTicks(min: number, max: number, n = 4): number[] {
   return ticks;
 }
 
-/** Multi-line time series over years (x = year index). */
+/**
+ * Vertical "reform" line, drawn between the last pre-reform year and the first
+ * reform year (where the lines actually jump), with a shaded band covering any
+ * phase-in.
+ */
+function markerSvg(xOf: (i: number) => number, years: number, marker?: ReformMarker): string {
+  if (!marker || marker.start <= 0 || marker.start >= years) return "";
+  const x0 = xOf(marker.start - 0.5);
+  const x1 = xOf(Math.min(years - 1, marker.start + marker.phaseIn - 0.5));
+  const band =
+    marker.phaseIn > 0
+      ? `<rect x="${x0.toFixed(1)}" y="${M.top}" width="${(x1 - x0).toFixed(1)}" height="${plotH}" class="reformband"/>`
+      : "";
+  return (
+    band +
+    `<line x1="${x0.toFixed(1)}" y1="${M.top}" x2="${x0.toFixed(1)}" y2="${M.top + plotH}" class="reformline"/>` +
+    `<text x="${(x0 + 3).toFixed(1)}" y="${M.top + 9}" class="reformlabel">${marker.phaseIn > 0 ? "phase-in" : "reform"}</text>`
+  );
+}
+
+/** Multi-line time series over years (x = year index). Null values break the line. */
 export function lineChart(opts: AxisChartOpts): string {
   const years = opts.series[0]?.values.length ?? 0;
-  const allVals = opts.series.flatMap((s) => s.values);
+  const allVals = opts.series.flatMap((s) => s.values).filter((v): v is number => v !== null);
   const yMax = opts.yMax ?? Math.max(0.0001, ...allVals) * 1.1;
   const yMin = opts.yMin ?? Math.min(0, ...allVals);
   const xOf = (i: number) => M.left + (years <= 1 ? 0 : (plotW * i) / (years - 1));
@@ -58,15 +92,23 @@ export function lineChart(opts: AxisChartOpts): string {
 
   const lines = opts.series
     .map((s) => {
-      const d = s.values
-        .map((v, i) => `${i === 0 ? "M" : "L"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`)
-        .join(" ");
-      return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
+      let d = "";
+      let penDown = false;
+      s.values.forEach((v, i) => {
+        if (v === null) {
+          penDown = false;
+          return;
+        }
+        d += `${penDown ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)} `;
+        penDown = true;
+      });
+      return d ? `<path d="${d.trim()}" fill="none" stroke="${s.color}" stroke-width="2"/>` : "";
     })
     .join("");
 
   const ref = opts.reference
-    ? `<line x1="${M.left}" y1="${yOf(opts.reference.value).toFixed(1)}" x2="${M.left + plotW}" y2="${yOf(opts.reference.value).toFixed(1)}" class="refline"/>`
+    ? `<line x1="${M.left}" y1="${yOf(opts.reference.value).toFixed(1)}" x2="${M.left + plotW}" y2="${yOf(opts.reference.value).toFixed(1)}" class="refline"/>` +
+      `<text x="${M.left + plotW}" y="${(yOf(opts.reference.value) - 3).toFixed(1)}" class="reflabel">${esc(opts.reference.label)}</text>`
     : "";
 
   const legend = opts.series
@@ -76,11 +118,11 @@ export function lineChart(opts: AxisChartOpts): string {
     )
     .join("");
 
-  return svg(opts.title, grid + ref + lines + xlabels + legend);
+  return svg(opts.title, grid + ref + markerSvg(xOf, years, opts.marker) + lines + xlabels + legend);
 }
 
 /** Stacked area (e.g., coverage mix over time). Series stack bottom-to-top. */
-export function stackedArea(title: string, series: Series[], total: number): string {
+export function stackedArea(title: string, series: Series[], total: number, marker?: ReformMarker): string {
   const years = series[0]?.values.length ?? 0;
   const xOf = (i: number) => M.left + (years <= 1 ? 0 : (plotW * i) / (years - 1));
   const yOf = (v: number) => M.top + plotH - (plotH * v) / (total || 1);
@@ -113,7 +155,7 @@ export function stackedArea(title: string, series: Series[], total: number): str
         `<g transform="translate(${M.left + i * 92}, 30)"><rect width="9" height="9" y="-8" fill="${s.color}"/><text x="13" class="legend">${esc(s.label)}</text></g>`,
     )
     .join("");
-  return svg(title, areas + ax + xlabels + legend);
+  return svg(title, areas + markerSvg(xOf, years, marker) + ax + xlabels + legend);
 }
 
 /** Categorical bar chart (e.g., a metric across income terciles). */
@@ -150,7 +192,12 @@ export function barChart(
 }
 
 /** Stacked area with an absolute (dollar) y-axis and its own auto-scaled max. */
-export function stackedAreaDollars(title: string, series: Series[], yFmt: (v: number) => string): string {
+export function stackedAreaDollars(
+  title: string,
+  series: Series[],
+  yFmt: (v: number) => string,
+  marker?: ReformMarker,
+): string {
   const years = series[0]?.values.length ?? 0;
   const totals = new Array(years).fill(0);
   for (const s of series) for (let i = 0; i < years; i++) totals[i] += s.values[i]!;
@@ -177,7 +224,7 @@ export function stackedAreaDollars(title: string, series: Series[], yFmt: (v: nu
   const legend = series
     .map((s, i) => `<g transform="translate(${M.left + (i % 3) * 130}, ${30 + Math.floor(i / 3) * 13})"><rect width="9" height="9" y="-8" fill="${s.color}"/><text x="13" class="legend">${esc(s.label)}</text></g>`)
     .join("");
-  return svg(title, areas + ax + xlabels + legend);
+  return svg(title, areas + markerSvg(xOf, years, marker) + ax + xlabels + legend);
 }
 
 /**

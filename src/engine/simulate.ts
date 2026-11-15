@@ -6,6 +6,7 @@ import { chooseCoverage, type ChoiceResult } from "./choice.ts";
 import { realizedSpend, adequateSpend } from "./utilization.ts";
 import { seedPremiums, updatePremiums, emptyExperience, type PoolExperience } from "./insurer.ts";
 import { buildEsiContext, setEmployerOffers, tierAv } from "./employer.ts";
+import { policyForYear, describeChanges } from "./reform.ts";
 import {
   createProviderState,
   ensureCapacity,
@@ -27,6 +28,14 @@ import type {
 
 function pct(x: number): number {
   return Math.round(x * 1000) / 10;
+}
+
+/** Format a national-scale dollar amount for narrative text. */
+function fmtDollars(x: number): string {
+  const a = Math.abs(x);
+  if (a >= 1e12) return `$${(x / 1e12).toFixed(2)} trillion`;
+  if (a >= 1e9) return `$${Math.round(x / 1e9)} billion`;
+  return `$${Math.round(x / 1e6)} million`;
 }
 
 /** Cost-sharing the household faces given its chosen coverage. */
@@ -101,58 +110,93 @@ export function runSimulation(config: SimConfig): SimResult {
   let innovationIndex = 1; // emergent medical-technology stock, carried across years
   const years: YearResult[] = [];
 
+  // Reform timeline (only when the run starts under a prior policy).
+  const reformStart = config.priorPolicy ? (config.reformYear ?? 0) : -1;
+  const phaseIn = Math.max(0, Math.round(config.phaseInYears ?? 0));
+  const reformChanges = config.priorPolicy ? describeChanges(config.priorPolicy, config.policy) : [];
+  // Sample dollars → national dollars, so narrative text matches the dashboard.
+  const national = PARAMS.displayPopulation / config.populationSize;
+
   for (let year = 0; year < config.years; year++) {
     const events: ExplanationEvent[] = [];
+    const { policy, progress: reformProgress } = policyForYear(config, year);
+
+    if (reformChanges.length > 0 && year === reformStart) {
+      events.push({
+        year,
+        module: "policy",
+        type: "reform-begins",
+        data: { changes: reformChanges.length, phaseInYears: phaseIn },
+        narrative:
+          (phaseIn > 0
+            ? `The reform begins and phases in over ${phaseIn} year${phaseIn === 1 ? "" : "s"}: dials move gradually, and on/off changes take effect in year ${reformStart + phaseIn}. `
+            : `The reform takes effect this year. `) + `What changes — ${reformChanges.join("; ")}.`,
+      });
+    }
+    if (reformChanges.length > 0 && phaseIn > 0 && year === reformStart + phaseIn) {
+      events.push({
+        year,
+        module: "policy",
+        type: "reform-complete",
+        data: { phaseInYears: phaseIn },
+        narrative: `The reform is now fully in force.`,
+      });
+    }
 
     // 1. Insurers post this year's individual-market premiums from last year's claims.
     if (lastExperience) {
-      const updated = updatePremiums(premiums, lastExperience, year, config.policy.riskAdjustment);
+      const updated = updatePremiums(premiums, lastExperience, year, policy.riskAdjustment);
       premiums = updated.premiums;
       events.push(...updated.events);
     }
 
     // 2. Employers decide whether (and how generously) to offer ESI, using a
-    // representative-worker valuation at the prevailing provider prices.
-    let muTotal = 0;
-    let raTotal = 0;
-    let incomeTotal = 0;
-    for (const h of pop) {
-      muTotal += expectedCost(h);
-      raTotal += h.riskAversion;
-      incomeTotal += h.income;
-    }
-    const esiCtx = buildEsiContext(
-      muTotal / pop.length,
-      raTotal / pop.length,
-      incomeTotal / pop.length,
-      prevPriceIndex,
-    );
-    setEmployerOffers(pop, esiCtx, config.policy);
+    // representative-worker valuation at the prevailing provider prices. Under
+    // single payer there is no employer coverage to offer.
     let offeredCount = 0;
     let offeredPremiumTotal = 0;
     let offeredAvTotal = 0;
-    for (const h of pop) {
-      if (h.esiOffer) {
-        offeredCount++;
-        offeredPremiumTotal += h.esiOffer.premium;
-        offeredAvTotal += tierAv(h.esiOffer.tier);
+    if (policy.singlePayer) {
+      for (const h of pop) h.esiOffer = null;
+    } else {
+      let muTotal = 0;
+      let raTotal = 0;
+      let incomeTotal = 0;
+      for (const h of pop) {
+        muTotal += expectedCost(h);
+        raTotal += h.riskAversion;
+        incomeTotal += h.income;
+      }
+      const esiCtx = buildEsiContext(
+        muTotal / pop.length,
+        raTotal / pop.length,
+        incomeTotal / pop.length,
+        prevPriceIndex,
+      );
+      setEmployerOffers(pop, esiCtx, policy);
+      for (const h of pop) {
+        if (h.esiOffer) {
+          offeredCount++;
+          offeredPremiumTotal += h.esiOffer.premium;
+          offeredAvTotal += tierAv(h.esiOffer.tier);
+        }
       }
     }
 
     // ---- Demand pass: choose coverage, realize shocks, compute care demand. ----
-    const hasPublicProvision = config.policy.publicProvisionLevel > 0;
+    const hasPublicProvision = policy.publicProvisionLevel > 0;
     const records: HouseholdYear[] = [];
     let demandHosp = 0;
     let demandPhys = 0;
     let publicProvisionDemand = 0;
     for (const h of pop) {
-      const choice = config.policy.singlePayer
+      const choice = policy.singlePayer
         ? SINGLE_PAYER_CHOICE
         : chooseCoverage(
             h,
             {
               premiums,
-              policy: config.policy,
+              policy,
               expectedPriceIndex: prevPriceIndex,
             },
             rng,
@@ -199,9 +243,9 @@ export function runSimulation(config: SimConfig): SimResult {
 
     // ---- Provider markets clear: private prices/queues, and the public system. ----
     ensureCapacity(providers, { hospital: demandHosp, physician: demandPhys }, publicProvisionDemand);
-    const clearH = clearSector(providers.hospital, demandHosp, config.policy);
-    const clearP = clearSector(providers.physician, demandPhys, config.policy);
-    const publicCapacity = config.policy.publicProvisionLevel * providers.baselineTotalDemand;
+    const clearH = clearSector(providers.hospital, demandHosp, policy);
+    const clearP = clearSector(providers.physician, demandPhys, policy);
+    const publicCapacity = policy.publicProvisionLevel * providers.baselineTotalDemand;
     const clearPub = queueOutcome(
       publicProvisionDemand,
       publicCapacity,
@@ -231,9 +275,10 @@ export function runSimulation(config: SimConfig): SimResult {
     let oopBurdenTotal = 0;
     let totalIncome = 0;
     let healthStockTotal = 0;
-    let unmetCount = 0;
+    let careGapTotal = 0;
     const revenue = { hospital: 0, physician: 0 };
     const cost = { hospital: 0, physician: 0 };
+    const deliveredPrivate = { hospital: 0, physician: 0 };
     const uninsuredByIncome: number[] = [];
     const incomes: number[] = [];
 
@@ -253,12 +298,12 @@ export function runSimulation(config: SimConfig): SimResult {
         totalIncome += h.income;
         incomes.push(h.income);
         uninsuredByIncome.push(choice.coverage === "uninsured" ? 1 : 0);
-        if (choice.coverage === "uninsured") penaltyRevenue += config.policy.mandatePenalty;
+        if (choice.coverage === "uninsured") penaltyRevenue += policy.mandatePenalty;
 
         const gapQuantity = rec.adequate > 0 ? Math.max(0, (rec.adequate - delivered) / rec.adequate) : 0;
         const waitGap = Math.min(0.6, clearPub.waitWeeks * PARAMS.waitToForgone);
         const gap = Math.min(1, gapQuantity + waitGap);
-        if (gap > PARAMS.unmetNeedThreshold) unmetCount++;
+        careGapTotal += gap;
         updateHealthStock(h, gap, innovationIndex);
         healthStockTotal += h.healthStock;
         continue;
@@ -286,7 +331,7 @@ export function runSimulation(config: SimConfig): SimResult {
         claims = 0;
         uncompensated += bill - oop;
         collectedFraction = bill > 0 ? oop / bill : 0;
-        penaltyRevenue += config.policy.mandatePenalty;
+        penaltyRevenue += policy.mandatePenalty;
       } else {
         oop = oopFor(plan, bill);
         claims = bill - oop;
@@ -316,6 +361,8 @@ export function runSimulation(config: SimConfig): SimResult {
       revenue.physician += billPhys * collectedFraction;
       cost.hospital += deliveredQHosp * PARAMS.providerMarginalCost;
       cost.physician += deliveredQPhys * PARAMS.providerMarginalCost;
+      deliveredPrivate.hospital += deliveredQHosp;
+      deliveredPrivate.physician += deliveredQPhys;
 
       coverage[choice.coverage]++;
       medical += bill;
@@ -335,7 +382,7 @@ export function runSimulation(config: SimConfig): SimResult {
             (rec.qPhys / q) * Math.min(0.6, clearP.waitWeeks * PARAMS.waitToForgone)
           : 0;
       const gap = Math.min(1, gapQuantity + waitGap);
-      if (gap > PARAMS.unmetNeedThreshold) unmetCount++;
+      careGapTotal += gap;
       updateHealthStock(h, gap, innovationIndex);
       healthStockTotal += h.healthStock;
     }
@@ -344,14 +391,21 @@ export function runSimulation(config: SimConfig): SimResult {
       coverage.individual > 0 ? individualRiskTotal / coverage.individual : 0;
 
     // ---- Provider dynamics: entry/exit/mergers from this year's margins. ----
+    // A private sector nobody used this year (all care in the public delivery
+    // system) is dormant: no margin, no price anyone paid, no dynamics.
+    const activeHosp = demandHosp > 0;
+    const activePhys = demandPhys > 0;
     const marginHosp = revenue.hospital > 0 ? (revenue.hospital - cost.hospital) / revenue.hospital : 0;
     const marginPhys = revenue.physician > 0 ? (revenue.physician - cost.physician) / revenue.physician : 0;
-    const snapHosp = snapshot(providers.hospital, clearH, marginHosp);
-    const snapPhys = snapshot(providers.physician, clearP, marginPhys);
-    events.push(...emitProviderEvents(year, "hospital", clearH, snapHosp, prevYear(years)?.providers.hospital));
-    events.push(...emitProviderEvents(year, "physician", clearP, snapPhys, prevYear(years)?.providers.physician));
-    events.push(...updateSector(providers.hospital, marginHosp, config.policy, rng, year));
-    events.push(...updateSector(providers.physician, marginPhys, config.policy, rng, year));
+    const paidHosp = deliveredPrivate.hospital > 0 ? revenue.hospital / deliveredPrivate.hospital : 0;
+    const paidPhys = deliveredPrivate.physician > 0 ? revenue.physician / deliveredPrivate.physician : 0;
+    const snapHosp = snapshot(providers.hospital, clearH, marginHosp, activeHosp, paidHosp);
+    const snapPhys = snapshot(providers.physician, clearP, marginPhys, activePhys, paidPhys);
+    const commercialPayers = commercialSpend > 0;
+    events.push(...emitProviderEvents(year, "hospital", clearH, snapHosp, prevYear(years)?.providers.hospital, commercialPayers));
+    events.push(...emitProviderEvents(year, "physician", clearP, snapPhys, prevYear(years)?.providers.physician, commercialPayers));
+    events.push(...updateSector(providers.hospital, marginHosp, policy, rng, year, activeHosp));
+    events.push(...updateSector(providers.physician, marginPhys, policy, rng, year, activePhys));
 
     // ---- Innovation: R&D funded by commercial revenue + provider margins. ----
     const avgMargin = (marginHosp + marginPhys) / 2;
@@ -412,15 +466,15 @@ export function runSimulation(config: SimConfig): SimResult {
           year,
           module: "coverage",
           type: "uninsured-shift",
-          data: { delta, uninsured: coverage.uninsured, insuredRate: pct(insuredRate) },
+          data: { deltaPct: pct(delta / pop.length), insuredRate: pct(insuredRate) },
           narrative:
-            `${Math.abs(delta).toLocaleString()} households ${delta > 0 ? "lost or dropped" : "gained"} coverage this year; ` +
+            `${pct(Math.abs(delta) / pop.length)}% of households ${delta > 0 ? "lost or dropped" : "gained"} coverage this year; ` +
             `the insured rate is now ${pct(insuredRate)}%.`,
         });
       }
     }
     if (
-      !config.policy.singlePayer &&
+      !policy.singlePayer &&
       coverage.individual < pop.length * 0.005 &&
       premiums.silver > 2 * seedSilver
     ) {
@@ -455,25 +509,39 @@ export function runSimulation(config: SimConfig): SimResult {
       });
     }
     if (revenueRequired > 0) {
+      // Reported at national scale (same scaling as the dashboard tiles).
+      const parts = [
+        ["premium subsidies", subsidyOutlays],
+        ["public insurance", publicOutlays],
+        ["direct provision", publicProvisionOutlays],
+        ["the ESI tax break", esiTaxExpenditure],
+      ] as const;
+      const breakdown = parts
+        .filter(([, v]) => v > 0)
+        .map(([label, v]) => `${label} ${fmtDollars(v * national)}`)
+        .join(", ");
       events.push({
         year,
         module: "government",
         type: "fiscal-ledger",
         data: {
-          subsidies: Math.round(subsidyOutlays),
-          publicOutlays: Math.round(publicOutlays),
-          publicProvisionOutlays: Math.round(publicProvisionOutlays),
-          deadweightLoss: Math.round(deadweightLoss),
+          subsidies: Math.round(subsidyOutlays * national),
+          publicOutlays: Math.round(publicOutlays * national),
+          publicProvisionOutlays: Math.round(publicProvisionOutlays * national),
+          esiTaxExpenditure: Math.round(esiTaxExpenditure * national),
+          deadweightLoss: Math.round(deadweightLoss * national),
         },
         narrative:
-          `Government spent $${Math.round((subsidyOutlays + publicOutlays + publicProvisionOutlays) / 1e6)}M ` +
-          `(subsidies + public coverage${publicProvisionOutlays > 0 ? " + running public clinics/hospitals" : ""}); ` +
-          `raising that revenue cost society an additional $${Math.round(deadweightLoss / 1e6)}M in deadweight loss.`,
+          `Government health costs came to ${fmtDollars(revenueRequired * national)} (${breakdown}` +
+          `${penaltyRevenue > 0 ? `, less ${fmtDollars(penaltyRevenue * national)} in mandate penalties` : ""}); ` +
+          `raising that revenue cost society a further ${fmtDollars(deadweightLoss * national)} in deadweight loss.`,
       });
     }
 
     years.push({
       year,
+      policy: { ...policy },
+      reformProgress,
       coverage: { ...coverage },
       insuredRate,
       uninsuredRateByIncome,
@@ -509,7 +577,7 @@ export function runSimulation(config: SimConfig): SimResult {
         : null,
       health: {
         meanHealthStock: healthStockTotal / pop.length,
-        unmetNeedRate: unmetCount / pop.length,
+        careGap: careGapTotal / pop.length,
       },
       innovation: {
         index: innovationThisYear,
@@ -549,14 +617,16 @@ function emitProviderEvents(
   year: number,
   sectorId: "hospital" | "physician",
   clearing: SectorClearing,
-  snap: { commercialPriceIndex: number; waitWeeks: number; hhi: number },
-  prev: { commercialPriceIndex: number; waitWeeks: number } | undefined,
+  snap: { active: boolean; commercialPriceIndex: number; waitWeeks: number; hhi: number },
+  prev: { active: boolean; commercialPriceIndex: number; waitWeeks: number } | undefined,
+  commercialPayers: boolean,
 ): ExplanationEvent[] {
   const events: ExplanationEvent[] = [];
   const label = sectorId === "hospital" ? "Hospital" : "Physician";
-  if (prev) {
+  if (prev && prev.active && snap.active) {
     const priceChange = snap.commercialPriceIndex / prev.commercialPriceIndex - 1;
-    if (Math.abs(priceChange) > 0.05) {
+    // Commercial prices only matter in years when someone pays them.
+    if (commercialPayers && Math.abs(priceChange) > 0.05) {
       events.push({
         year,
         module: "provider",

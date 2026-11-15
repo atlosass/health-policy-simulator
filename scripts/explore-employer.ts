@@ -1,7 +1,7 @@
-/** Phase 3 scratch harness: employer-market trajectories. */
+/** Scratch harness: employer-market trajectories. Current law to year 4, reform from year 5. */
 import {
   runSimulation,
-  defaultConfig,
+  reformConfig,
   BASELINE_POLICY,
   EMPLOYER_MANDATE,
   TAX_EXCLUSION_CAPPED,
@@ -10,7 +10,7 @@ import {
 import type { Policy } from "../src/engine/index.ts";
 
 function show(name: string, policy: Policy) {
-  const res = runSimulation(defaultConfig(policy, 42, 15));
+  const res = runSimulation(reformConfig(policy, { years: 15 }));
   console.log(`\n=== ${name} ===`);
   console.log("yr | esi  indiv pub  unins | offer% avgAV avgPrem wageInc | taxExp$M NHE/GDP DWL$M");
   for (const y of res.years) {
@@ -45,5 +45,5 @@ function show(name: string, policy: Policy) {
 
 show("BASELINE", BASELINE_POLICY);
 show("EMPLOYER MANDATE", EMPLOYER_MANDATE);
-show("TAX EXCLUSION CAPPED ($4k)", TAX_EXCLUSION_CAPPED);
+show("TAX EXCLUSION CAPPED ($5k)", TAX_EXCLUSION_CAPPED);
 show("TAX EXCLUSION REPEALED", TAX_EXCLUSION_REPEALED);

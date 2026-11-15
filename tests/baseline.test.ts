@@ -25,8 +25,8 @@ test("baseline health spending share of GDP is in the familiar range", () => {
   );
 });
 
-test("baseline market is stable and unmet need is modest", () => {
-  assert.ok(y10.health.unmetNeedRate < 0.12, `unmet need ${(y10.health.unmetNeedRate * 100).toFixed(1)}%`);
+test("baseline market is stable and the care gap is small", () => {
+  assert.ok(y10.health.careGap < 0.08, `care gap ${(y10.health.careGap * 100).toFixed(1)}%`);
   assert.ok(y10.premiums.silver > 4_000 && y10.premiums.silver < 14_000, `silver premium $${Math.round(y10.premiums.silver)}`);
 });
 

@@ -27,6 +27,9 @@ export interface ProviderState {
   baselineTotalDemand: number;
 }
 
+/** Reported utilization is capped here; beyond it the number carries no extra information. */
+const MAX_REPORTED_UTILIZATION = 10;
+
 /**
  * Queue outcome for a capacity-constrained delivery channel: how much of demand
  * is delivered (rationing when demand exceeds capacity) and the resulting wait,
@@ -38,8 +41,12 @@ export function queueOutcome(
   capacity: number,
   baseWaitWeeks: number,
 ): { utilization: number; deliveredFraction: number; waitWeeks: number } {
-  const utilization = capacity > 0 ? demand / capacity : Infinity;
-  const deliveredFraction = utilization > 1 ? 1 / utilization : 1;
+  // No demand: nothing to queue for. No capacity but some demand: nothing is
+  // delivered. Both cases stay finite so results never carry Infinity.
+  if (demand <= 0) return { utilization: 0, deliveredFraction: 1, waitWeeks: 0 };
+  if (capacity <= 0) return { utilization: MAX_REPORTED_UTILIZATION, deliveredFraction: 0, waitWeeks: PARAMS.maxWaitWeeks };
+  const utilization = Math.min(MAX_REPORTED_UTILIZATION, demand / capacity);
+  const deliveredFraction = demand > capacity ? capacity / demand : 1;
   const rho = Math.min(utilization, PARAMS.waitCeiling - 0.05);
   const waitWeeks = Math.min(PARAMS.maxWaitWeeks, (baseWaitWeeks * (rho * rho)) / (PARAMS.waitCeiling - rho));
   return { utilization, deliveredFraction, waitWeeks };
@@ -133,18 +140,15 @@ export function clearSector(sector: SectorState, demand: number, policy: Policy)
   return { commercialPriceIndex, publicPriceIndex, deliveredFraction, waitWeeks, utilization, hhi };
 }
 
-export interface SectorMargin {
-  /** Payments actually collected (insurer + patient; excludes uncompensated care). */
-  revenue: number;
-  /** Operating cost = delivered care × marginal cost. */
-  cost: number;
-}
-
 /**
  * Evolve a sector after the year's margin is known: induce entry (lagged) when
  * margins are fat, force exit when they go negative, and let firms merge under
  * margin pressure (subject to antitrust). Advance the construction/training
  * pipeline. Returns any narrative events.
+ *
+ * A sector with no patients (`active` false — all care has moved to a public
+ * delivery system) is dormant: it has no margin to react to, so nothing
+ * enters, exits, or merges.
  */
 export function updateSector(
   sector: SectorState,
@@ -152,11 +156,20 @@ export function updateSector(
   policy: Policy,
   rng: Rng,
   year: number,
+  active = true,
 ): ExplanationEvent[] {
   const events: ExplanationEvent[] = [];
   const cfg = PARAMS.providerSectors[sector.id];
   const capacityPerFirm = sector.baselineCapacity / cfg.initialFirms;
   const label = sector.id === "hospital" ? "Hospital" : "Physician";
+
+  if (!active) {
+    const arriving = sector.pipeline.shift()!;
+    sector.capacity += arriving.capacity;
+    sector.firms += arriving.firms;
+    sector.pipeline.push({ capacity: 0, firms: 0 });
+    return events;
+  }
 
   // Entry: fat margins attract new capacity, arriving after the sector's lag.
   if (margin > PARAMS.entryMargin) {
@@ -230,8 +243,8 @@ export function updateSector(
         },
         narrative:
           `Two ${label.toLowerCase()}s merged${distressed ? " under margin pressure" : ""} ` +
-          `(now ~${Math.round(sector.firms)} firms, HHI ${Math.round(hhiOf(sector.firms)).toLocaleString()}). ` +
-          `Expect commercial prices to rise next year.`,
+          `(now ~${Math.round(sector.firms)} firms, HHI ${Math.round(hhiOf(sector.firms)).toLocaleString()}).` +
+          (policy.singlePayer ? "" : ` Expect commercial prices to rise next year.`),
       });
     } else {
       events.push({
@@ -257,13 +270,17 @@ export function snapshot(
   sector: SectorState,
   clearing: SectorClearing,
   margin: number,
+  active: boolean,
+  avgPricePaid: number,
 ): SectorSnapshot {
   return {
+    active,
     firms: sector.firms,
     hhi: clearing.hhi,
     capacity: sector.capacity,
     utilization: clearing.utilization,
     commercialPriceIndex: clearing.commercialPriceIndex,
+    avgPricePaid,
     waitWeeks: clearing.waitWeeks,
     margin,
     deliveredFraction: clearing.deliveredFraction,

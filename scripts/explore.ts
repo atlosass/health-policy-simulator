@@ -1,7 +1,7 @@
-/** Scratch harness: print key trajectories for the policy configurations. */
+/** Scratch harness: print key trajectories. Current law to year 4, reform from year 5. */
 import {
   runSimulation,
-  defaultConfig,
+  reformConfig,
   BASELINE_POLICY,
   UNSUPPORTED_COMMUNITY_RATING,
   UNDERWRITTEN_NO_SUPPORTS,
@@ -13,9 +13,9 @@ import {
 import type { Policy } from "../src/engine/index.ts";
 
 function show(name: string, policy: Policy) {
-  const res = runSimulation(defaultConfig(policy, 42, 20));
+  const res = runSimulation(reformConfig(policy, { years: 20 }));
   console.log(`\n=== ${name} ===`);
-  console.log("yr | insured  unins | NHE/GDP | hospHHI hPrice hWait | physHHI pPrice pWait | margin h/p | unmet health | DWL$M");
+  console.log("yr | insured  unins | NHE/GDP | hospHHI hPrice hWait | physHHI pPrice pWait | margin h/p | gap%  health | DWL$M");
   for (const y of res.years) {
     const h = y.providers.hospital;
     const p = y.providers.physician;
@@ -37,7 +37,7 @@ function show(name: string, policy: Policy) {
         "|",
         (h.margin * 100).toFixed(0).padStart(3) + "/" + (p.margin * 100).toFixed(0).padStart(3),
         "|",
-        (y.health.unmetNeedRate * 100).toFixed(1).padStart(4),
+        (y.health.careGap * 100).toFixed(1).padStart(4),
         y.health.meanHealthStock.toFixed(3).padStart(6),
         "|",
         (y.government.deadweightLoss / 1e6).toFixed(0).padStart(5),

@@ -27,9 +27,6 @@ export const TIER_BY_ID: Record<TierId, PlanTier> = Object.fromEntries(
   TIERS.map((t) => [t.id, t]),
 ) as Record<TierId, PlanTier>;
 
-/** ESI plans are gold-equivalent in v1 (employer market becomes endogenous in Phase 3). */
-export const ESI_TIER: PlanTier = TIER_BY_ID.gold;
-
 /** Public insurance: near-comprehensive coverage with nominal cost-sharing. */
 export const PUBLIC_PLAN: PlanTier = {
   id: "platinum",
