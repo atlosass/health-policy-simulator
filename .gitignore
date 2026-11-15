@@ -1,0 +1,7 @@
+# Build output (regenerate with `npm run build`)
+web/dist/
+
+# Never install dependencies here: Google Drive cannot sync node_modules
+node_modules/
+
+*.log

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Health Policy Simulator</title>
+    <style>
+      :root {
+        --bg: #f1f5f9; --panel: #ffffff; --ink: #0f172a; --muted: #64748b;
+        --line: #e2e8f0; --accent: #2563eb; --good: #16a34a; --bad: #dc2626;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; background: var(--bg); color: var(--ink);
+        font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      }
+      body.computing { cursor: progress; }
+      #app { max-width: 1320px; margin: 0 auto; padding: 16px; }
+      header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
+      h1 { font-size: 20px; margin: 0; }
+      .sub { color: var(--muted); margin: 4px 0 0; max-width: 60ch; }
+      .actions button {
+        font: inherit; padding: 7px 12px; margin-left: 8px; border: 1px solid var(--line);
+        background: #fff; border-radius: 8px; cursor: pointer;
+      }
+      .actions button:hover { border-color: var(--accent); color: var(--accent); }
+      .layout { display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; }
+      @media (max-width: 880px) { .layout { grid-template-columns: 1fr; } }
+
+      /* Panel */
+      #panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; }
+      .grouphead { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 14px 0 6px; }
+      .presets .grouphead { margin-top: 2px; }
+      .presets select, #panel select { width: 100%; font: inherit; padding: 7px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+      .lever { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+      .lever label { font-size: 13px; cursor: help; }
+      .rangewrap { display: flex; align-items: center; gap: 6px; }
+      .rangewrap input[type="range"] { width: 116px; }
+      .val { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); min-width: 56px; text-align: right; }
+      input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+
+      /* Tiles */
+      .tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 14px; }
+      @media (max-width: 880px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+      .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+      .tval { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+      .tlabel { font-size: 12px; color: var(--ink); margin-top: 2px; }
+      .tsub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+      .tile.good .tsub { color: var(--good); } .tile.bad .tsub { color: var(--bad); }
+
+      /* Charts grid */
+      .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+      @media (max-width: 880px) { .grid { grid-template-columns: 1fr; } }
+      .chart, .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px; width: 100%; height: auto; }
+      .card { padding: 12px; }
+      .charttitle { font-size: 12.5px; font-weight: 700; fill: var(--ink); color: var(--ink); }
+      .grid line.grid, .grid polygon.grid, svg .grid { stroke: var(--line); stroke-width: 1; }
+      .ytick, .xtick { fill: var(--muted); font-size: 9px; } .ytick { text-anchor: end; } .xtick { text-anchor: middle; }
+      .legend { fill: var(--muted); font-size: 10px; } .axislabel { fill: var(--ink); font-size: 10px; font-weight: 600; }
+      .barval { fill: var(--ink); font-size: 10px; font-weight: 600; text-anchor: middle; }
+      .refline { stroke: #94a3b8; stroke-dasharray: 3 3; }
+
+      /* Cards (key/value) */
+      table.kv { width: 100%; border-collapse: collapse; margin-top: 6px; }
+      table.kv td { padding: 4px 0; border-bottom: 1px dashed var(--line); font-size: 13px; }
+      table.kv td.num { text-align: right; font-variant-numeric: tabular-nums; }
+      .notecard { display: flex; flex-direction: column; }
+      .notecard .note { color: var(--muted); font-size: 13px; margin: 10px 4px; }
+
+      /* Drill-down */
+      .drill { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-top: 14px; }
+      .drillhead { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+      .drillhead input[type="range"] { flex: 1; max-width: 420px; }
+      #eventlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+      #eventlist li { font-size: 13px; padding: 7px 9px; background: #f8fafc; border: 1px solid var(--line); border-radius: 8px; }
+      #eventlist li.muted { color: var(--muted); }
+      .tag { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 1px 6px; border-radius: 999px; margin-right: 8px; color: #fff; }
+      .tag-insurer { background: #16a34a; } .tag-coverage { background: #2563eb; } .tag-government { background: #9333ea; }
+      .tag-market { background: #dc2626; } .tag-provider { background: #ea580c; }
+
+      .flash { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./dist/web/app.js"></script>
+  </body>
+</html>
