@@ -7,6 +7,7 @@ import { realizedSpend, adequateSpend } from "./utilization.ts";
 import { seedPremiums, updatePremiums, emptyExperience, type PoolExperience } from "./insurer.ts";
 import { buildEsiContext, setEmployerOffers, clearEmployerOffers, tierAv } from "./employer.ts";
 import { policyForYear, describeChanges } from "./reform.ts";
+import { FINANCING } from "./financing.ts";
 import {
   createProviderState,
   ensureCapacity,
@@ -117,6 +118,11 @@ export function runSimulation(config: SimConfig): SimResult {
   let prevWageOffset: number | null = null; // last wage offset reported in a narrative event
   let prevOfferRate: number | null = null;
   let prevRdIntensity: number | null = null; // last R&D intensity reported in a narrative event
+  // What the government was raising for health in the last year before the
+  // reform. Revenue up to this keeps coming from general revenue; the reform's
+  // financing choice applies to anything above it. (Zero when the policy
+  // applies from year 0: then all revenue is raised the chosen way.)
+  let preReformRevenue = 0;
   const seedSilver = premiums.silver;
 
   const providers = createProviderState();
@@ -300,7 +306,8 @@ export function runSimulation(config: SimConfig): SimResult {
     const uninsuredByIncome: number[] = [];
     const incomes: number[] = [];
     // What each household paid this year, by channel (same order as `incomes`).
-    const paid: { outOfPocket: number; premiums: number; wages: number; taxBill: number }[] = [];
+    const instrument = FINANCING[policy.financing];
+    const paid: { outOfPocket: number; premiums: number; wages: number; taxBill: number; newBase: number }[] = [];
 
     for (const rec of records) {
       const { h, choice, mu, shockMult } = rec;
@@ -328,6 +335,7 @@ export function runSimulation(config: SimConfig): SimResult {
           premiums: choice.coverage === "uninsured" ? policy.mandatePenalty : 0,
           wages: wageOffset,
           taxBill: taxLiability(h.cashIncome),
+          newBase: instrument.base(h.cashIncome),
         });
 
         const gapQuantity = rec.adequate > 0 ? Math.max(0, (rec.adequate - delivered) / rec.adequate) : 0;
@@ -423,6 +431,7 @@ export function runSimulation(config: SimConfig): SimResult {
         premiums: choice.premiumPaid + (plan === null ? policy.mandatePenalty : 0),
         wages: wagesPaid,
         taxBill: taxLiability(h.cashIncome),
+        newBase: instrument.base(h.cashIncome),
       });
 
       // Health stock: the gap between adequate care and what was actually
@@ -501,13 +510,20 @@ export function runSimulation(config: SimConfig): SimResult {
       0,
       subsidyOutlays + publicOutlays + publicProvisionOutlays + esiTaxExpenditure - penaltyRevenue,
     );
-    const deadweightLoss = (PARAMS.marginalCostOfFunds - 1) * revenueRequired;
+    // Financing: revenue up to the pre-reform level comes from general revenue;
+    // the rest is raised with the reform's instrument, at that instrument's cost.
+    if (reformStart >= 0 && year < reformStart) preReformRevenue = revenueRequired;
+    const newRevenue = policy.financing === "general" ? 0 : Math.max(0, revenueRequired - preReformRevenue);
+    const generalRevenue = revenueRequired - newRevenue;
+    const dragGeneral = (PARAMS.marginalCostOfFunds - 1) * generalRevenue;
+    const dragNew = (instrument.costOfFunds - 1) * newRevenue;
+    const deadweightLoss = dragGeneral + dragNew;
 
     // Distributional lens: uninsured rate by income tercile.
     const sorted = [...incomes].sort((a, b) => a - b);
     const t1 = sorted[Math.floor(sorted.length / 3)]!;
     const t2 = sorted[Math.floor((2 * sorted.length) / 3)]!;
-    const newBucket = () => ({ uninsured: 0, n: 0, income: 0, outOfPocket: 0, premiums: 0, wages: 0, taxBill: 0 });
+    const newBucket = () => ({ uninsured: 0, n: 0, income: 0, outOfPocket: 0, premiums: 0, wages: 0, taxBill: 0, newBase: 0 });
     const bucket = { low: newBucket(), mid: newBucket(), high: newBucket() };
     for (let i = 0; i < incomes.length; i++) {
       const b = incomes[i]! <= t1 ? bucket.low : incomes[i]! <= t2 ? bucket.mid : bucket.high;
@@ -519,22 +535,26 @@ export function runSimulation(config: SimConfig): SimResult {
       b.premiums += p.premiums;
       b.wages += p.wages;
       b.taxBill += p.taxBill;
+      b.newBase += p.newBase;
     }
-    // Who pays: the taxes that finance government health costs (and the drag of
-    // raising them) are shared out in proportion to each household's tax bill.
+    // Who pays: general revenue (and the drag of raising it) is shared out in
+    // proportion to each household's tax bill; new revenue in proportion to the
+    // base of the instrument the reform chose.
     const allBuckets = [bucket.low, bucket.mid, bucket.high];
     const totalTaxBill = allBuckets.reduce((sum, b) => sum + b.taxBill, 0);
+    const totalNewBase = allBuckets.reduce((sum, b) => sum + b.newBase, 0);
     const burdenOf = (groups: (typeof bucket.low)[]): HealthBurden => {
       const sum = (read: (b: typeof bucket.low) => number) => groups.reduce((total, b) => total + read(b), 0);
       const n = Math.max(1, sum((b) => b.n));
       const taxShare = totalTaxBill > 0 ? sum((b) => b.taxBill) / totalTaxBill : 0;
+      const newShare = totalNewBase > 0 ? sum((b) => b.newBase) / totalNewBase : 0;
       return {
         income: sum((b) => b.income) / n,
         outOfPocket: sum((b) => b.outOfPocket) / n,
         premiums: sum((b) => b.premiums) / n,
         wages: sum((b) => b.wages) / n,
-        taxes: (taxShare * revenueRequired) / n,
-        drag: (taxShare * deadweightLoss) / n,
+        taxes: (taxShare * generalRevenue + newShare * newRevenue) / n,
+        drag: (taxShare * dragGeneral + newShare * dragNew) / n,
       };
     };
     const burden = {
@@ -696,7 +716,11 @@ export function runSimulation(config: SimConfig): SimResult {
         narrative:
           `Government health costs came to ${fmtDollars(revenueRequired * national)} (${breakdown}` +
           `${penaltyRevenue > 0 ? `, less ${fmtDollars(penaltyRevenue * national)} in mandate penalties` : ""}); ` +
-          `raising that revenue cost society a further ${fmtDollars(deadweightLoss * national)} in deadweight loss.`,
+          `raising that revenue cost society a further ${fmtDollars(deadweightLoss * national)} in deadweight loss.` +
+          (newRevenue > 0
+            ? ` Of the total, ${fmtDollars(newRevenue * national)} is new revenue, raised by ${instrument.phrase}; ` +
+              `each dollar raised that way costs society ${Math.round((instrument.costOfFunds - 1) * 100)} cents in lost output.`
+            : ""),
       });
     }
 
@@ -727,6 +751,7 @@ export function runSimulation(config: SimConfig): SimResult {
         penaltyRevenue,
         esiTaxExpenditure,
         revenueRequired,
+        newRevenue,
         deadweightLoss,
         totalSocialCost: revenueRequired + deadweightLoss,
       },

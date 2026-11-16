@@ -48,6 +48,13 @@ export interface Household {
   tier: TierId | null;
 }
 
+/**
+ * How a reform raises health revenue beyond what the government raised before
+ * it: the existing tax mix, a payroll tax, an income tax on high earners, or a
+ * flat premium. See financing.ts.
+ */
+export type Financing = "general" | "payroll" | "topIncome" | "flat";
+
 /** Student-facing policy package: every lever the simulator exposes. */
 export interface Policy {
   /** Community rating on the individual market (vs. full medical underwriting). */
@@ -102,6 +109,10 @@ export interface Policy {
   employerMandate: boolean;
   /** Cap on the premium amount shielded by the tax exclusion ($). null = uncapped (current law). */
   taxExclusionCap: number | null;
+
+  // ---- Financing ----
+  /** How health revenue beyond the pre-reform level is raised. Changes who pays and the deadweight loss; "general" is current law. */
+  financing: Financing;
 }
 
 export interface SimConfig {
@@ -202,6 +213,8 @@ export interface YearResult {
     /** Forgone income+payroll tax revenue from the ESI exclusion. */
     esiTaxExpenditure: number;
     revenueRequired: number;
+    /** The part of `revenueRequired` raised with the reform's chosen instrument: revenue above the pre-reform level. Zero under general-revenue financing. */
+    newRevenue: number;
     deadweightLoss: number;
     totalSocialCost: number;
   };

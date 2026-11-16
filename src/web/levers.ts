@@ -1,11 +1,12 @@
 /** Policy-lever UI spec and URL (shareable-link) state encoding. */
-import { BASELINE_POLICY } from "../engine/index.ts";
+import { BASELINE_POLICY, FINANCING, FINANCING_OPTIONS, isFinancing } from "../engine/index.ts";
 import type { Policy } from "../engine/index.ts";
 import { dollars } from "./format.ts";
 import { packChallenge, sanitizeChallenge, type Challenge } from "./challenge.ts";
 
 export type Lever =
   | { kind: "toggle"; key: keyof Policy; group: string; label: string; help: string }
+  | { kind: "choice"; key: keyof Policy; group: string; label: string; help: string; options: { value: string; label: string }[] }
   | {
       kind: "range";
       key: keyof Policy;
@@ -59,6 +60,19 @@ export const LEVERS: Lever[] = [
   { kind: "range", key: "antitrustStringency", group: "Provider market", label: "Antitrust stringency", help: "Probability a proposed provider merger is blocked. Providers propose mergers more often the more a merger would raise their prices, so this matters most where commercial prices are unregulated.", min: 0, max: 1, step: 0.1, fmt: ratio },
   { kind: "range", key: "certificateOfNeed", group: "Provider market", label: "Certificate of Need", help: "Share of new hospital capacity that regulators refuse (replacing worn-out capacity is exempt). Hospitals normally expand when demand outgrows them, about 3 years after they commit. At 100% they cannot expand at all, so a queue opened by higher demand never clears.", min: 0, max: 1, step: 0.1, fmt: ratio },
   { kind: "range", key: "residencySlots", group: "Provider market", label: "Residency slots / scope", help: "Multiplier on how many new physicians can enter training each year. At 1.00× the workforce can grow about 1.5% a year at most; below about 0.7× retirements outrun new physicians and it shrinks. Any change takes 7 years (the training lag) to reach patients.", min: 0.5, max: 2, step: 0.1, fmt: mult },
+
+  // Financing
+  {
+    kind: "choice",
+    key: "financing",
+    group: "Financing",
+    label: "New revenue raised by",
+    help:
+      "How the government raises any health revenue beyond what it was raising before the reform. General revenue is the existing mix of income and payroll taxes. " +
+      "A payroll tax takes the same percentage of everyone's pay. An income tax on high earners falls on earnings above $90,000. A flat premium charges every household the same number of dollars. " +
+      "Broad, flat charges do the least economic damage per dollar raised and fall hardest on low incomes; taxes on high earners are the reverse. See the “Who pays” charts.",
+    options: FINANCING_OPTIONS.map((value) => ({ value, label: FINANCING[value].label })),
+  },
 ];
 
 export const LEVER_GROUPS = [...new Set(LEVERS.map((l) => l.group))];
@@ -118,6 +132,8 @@ export function decodeState(hash: string): ShareState | null {
       const v = obj[k];
       if (NULLABLE.has(k)) {
         if (v === null || finite(v)) policy[k] = v;
+      } else if (k === "financing") {
+        if (isFinancing(v)) policy[k] = v;
       } else if (typeof BASELINE_POLICY[k] === "boolean") {
         if (typeof v === "boolean") policy[k] = v;
       } else if (finite(v)) {

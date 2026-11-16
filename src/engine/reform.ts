@@ -1,3 +1,4 @@
+import { FINANCING } from "./financing.ts";
 import type { Policy, SimConfig } from "./types.ts";
 
 /** A subsidy cutoff at or above this multiple of the poverty line behaves as "no cliff". */
@@ -61,10 +62,12 @@ const LABELS: Record<keyof Policy, string> = {
   residencySlots: "residency slots",
   employerMandate: "employer mandate",
   taxExclusionCap: "ESI tax-exclusion cap",
+  financing: "new health revenue raised by",
 };
 
 function show(key: keyof Policy, v: Policy[keyof Policy]): string {
   if (typeof v === "boolean") return v ? "on" : "off";
+  if (typeof v === "string") return FINANCING[v].label.toLowerCase();
   if (v === null) return key === "taxExclusionCap" ? "uncapped" : "none";
   if (key === "subsidyCutoffMultiple" && v >= NO_CLIFF) return "no cliff";
   if (key === "mandatePenalty" || key === "taxExclusionCap") return `$${Math.round(v).toLocaleString("en-US")}`;

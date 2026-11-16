@@ -2,7 +2,7 @@
 
 **Purpose:** A web-based simulator for *Introduction to Health Policy in the United States* that lets students design policy packages and watch cost, quality, and access outcomes unfold over a 10–20 year horizon. The central pedagogical goal is that Iron Triangle trade-offs **emerge from economic mechanisms** — they are never hard-coded.
 
-**Status:** Design v1.0 (November 2026) — the engine (households, insurers, providers, employers, government incl. VA/NHS direct provision), the no-build web frontend, and all three classroom modes are built, validated by 103 tests that run every scenario on several seeds. November 2026 revisions: the **reform timeline** (§2a), the **care gap**, **supply that follows demand**, **profit-driven mergers**, **wage pass-through** (§3.2, §3.3), **independent random draws per household**, a **calibration-target table** with medical costs recalibrated to the real level (§8), **multi-run ranges** on the dashboard, **per-chart explanations**, **challenges** and the **comparison view** (§5, §6). Remaining work is in §9; anything specified but not built is marked *(not built)*.
+**Status:** Design v1.0 (November 2026) — the engine (households, insurers, providers, employers, government incl. VA/NHS direct provision), the no-build web frontend, and all three classroom modes are built, validated by 112 tests that run every scenario on several seeds. November 2026 revisions: the **reform timeline** (§2a), the **care gap**, **supply that follows demand**, **profit-driven mergers**, **wage pass-through** (§3.2, §3.3), **independent random draws per household**, a **calibration-target table** with medical costs recalibrated to the real level (§8), **multi-run ranges** on the dashboard, **per-chart explanations**, **challenges** and the **comparison view** (§5, §6). Remaining work is in §9; anything specified but not built is marked *(not built)*.
 
 ---
 
@@ -114,7 +114,27 @@ A reform does not start from a blank slate: it lands on a system that already ha
 - *Wages given up*: the cash wages employers hold back for their share of premiums (§3.2), net of the tax break on that contribution.
 - *Taxes*: the household's share of the revenue the government must raise for health (subsidies, public insurance, direct provision, and the revenue lost to the ESI tax break). Shares are proportional to a stylized tax bill: the three-bracket income tax (4% / 15% / 32%) plus payroll tax, so taxes rise faster than income.
 
-The four channels add up to national health spending: exactly under single payer, and to within about 5–8% where employers are involved (firms recover premiums from wages using last year's take-up and cannot recover them from workers at the wage floor; care nobody paid for is excluded). The *drag of taxation* (each household's share of the deadweight loss) is reported alongside as income lost but not paid to anyone. Under current law the low-income third pays about 24% of its income toward health care, the middle third 21% and the high-income third 14%, because premiums and held-back wages are roughly the same number of dollars for everyone. Single payer at adequate rates turns that around: about 12% / 15% / 21%. *Limitation: the tax schedule is fixed. The model has no lever for how a reform is financed (a payroll tax, a head tax, a more progressive income tax), which is the choice that decides who pays.*
+The four channels add up to national health spending: exactly under single payer, and to within about 5–8% where employers are involved (firms recover premiums from wages using last year's take-up and cannot recover them from workers at the wage floor; care nobody paid for is excluded). The *drag of taxation* (each household's share of the deadweight loss) is reported alongside as income lost but not paid to anyone. Under current law the low-income third pays about 24% of its income toward health care, the middle third 21% and the high-income third 14%, because premiums and held-back wages are roughly the same number of dollars for everyone. Single payer at adequate rates turns that around: about 12% / 15% / 21%.
+
+**The financing lever (`Policy.financing`, `src/engine/financing.ts`):** a reform chooses how to raise the health revenue it needs *beyond what the government was raising in the last year before the reform*; revenue up to that level keeps coming from general revenue. (In steady-state mode there is no pre-reform level, so all revenue is raised the chosen way.) The four instruments differ in who pays and in how much damage raising a dollar does:
+
+| Instrument | Each household is charged in proportion to | Cost of public funds |
+|---|---|---|
+| General revenue (current law) | its stylized tax bill (income tax brackets + payroll tax) | 1.30 |
+| Payroll tax | its cash wages | 1.25 |
+| Income tax on high earners | its cash wages above $90,000 | 1.50 |
+| Flat premium | nothing: the same dollars for every household | 1.05 |
+
+The costs of public funds are stylized values in the range the public-finance literature reports: a lump-sum charge distorts almost nothing, and a tax concentrated on high earners distorts the most per dollar. So the lever is a trade-off, not a free choice. For single payer at adequate rates, about $1.3 trillion of new revenue (national, year 19):
+
+| Financing | Low third pays | Middle | High third | Deadweight loss |
+|---|---|---|---|---|
+| General revenue | 12% of income | 15% | 21% | $565B |
+| Payroll tax | 17% | 17% | 19% | $502B |
+| Income tax on high earners | 5% | 5% | 27% | $818B |
+| Flat premium | 37% | 21% | 14% | $249B |
+
+The choice changes who pays and the deadweight loss and nothing else. *Limitation: taxes do not feed back into behavior. Households do not work less, earn less or change their coverage because of how the money is raised; the deadweight loss stands in for all of that as a single number per dollar.* With a phase-in the choice is a switch: it takes effect when the phase-in completes.
 
 ---
 
@@ -128,7 +148,8 @@ The four channels add up to national health spending: exactly under single payer
 | Public programs | eligibility threshold, payment rates (% of commercial), single-payer toggle, **government direct-provision capacity (VA/NHS)** |
 | Employer market | employer mandate, tax exclusion cap ($0 = repeal) |
 | Provider market | all-payer price cap, antitrust stringency (merger review), Certificate of Need, residency slots / scope of practice |
-| Financing | (derived) required tax revenue + deadweight loss, displayed not chosen |
+| Financing | how new health revenue is raised: general revenue, a payroll tax, an income tax on high earners, or a flat premium |
+| (derived) | required tax revenue and deadweight loss, displayed not chosen |
 
 Phase-in applies to the whole package, not lever by lever (§2a). *Not built:* benefit mandates (minimum actuarial value), MLR floors, cost-sharing subsidies, an adjustable subsidy generosity schedule, and per-lever phase-in schedules.
 
@@ -174,7 +195,7 @@ All three are built. Everything travels in the URL: a package link carries the l
 - **State sharing:** policy package, reform year, phase-in, seed and any challenge serialized (diff-from-default → UTF-8 → base64) into the URL hash; a comparison is `#cmp.` plus a list of names and package links. Decoding validates the type of every field and falls back to the default for anything malformed. No backend ever.
 - **Run it:** `npm run build` then `npm run serve` (a ~30-line zero-dep Node static server at `scripts/serve.ts`) → http://localhost:5173/. Or `npm run dev` (build + serve).
 - **Hosting:** static site — `web/` is the deployable root (GitHub Pages / Netlify / a USB stick / the LMS).
-- **Testing:** 103 automated tests. Every scenario in §8 runs on three seeds (five for the merger and wage tests, eight for calibration), so no threshold is fitted to one draw; the calibration targets are enforced as bands on multi-seed means; the dashboard's plain logic (links, challenges, the comparison list, summaries across runs) is unit-tested; rendering is checked in a browser.
+- **Testing:** 112 automated tests. Every scenario in §8 runs on three seeds (five for the merger and wage tests, eight for calibration), so no threshold is fitted to one draw; the calibration targets are enforced as bands on multi-seed means; the dashboard's plain logic (links, challenges, the comparison list, summaries across runs) is unit-tested; rendering is checked in a browser.
 - **Version control:** the folder is a git repository (`web/dist/` and logs ignored).
 
 ---
@@ -279,7 +300,7 @@ Supply, merger and wage scenarios (new in v0.8; reform mode with the reform in y
 | 6. Playtesting | instructor + TA shakedown with real assignments; student-facing wording; parameter tuning | before classroom use |
 | 7. Cost recalibration | ✅ **DONE (Nov 15)** — medical costs raised 37% to the employer-premium anchor; deductibles so that plan tiers match their labels; narrow-network pricing in the individual market; employee premium share 30%; national dollars scaled to adults 26–64; all 12 calibration targets met | — |
 | 8. Who pays | ✅ **DONE (Nov 15)** — health spending assigned to households by channel (out of pocket, premiums, wages given up, taxes) and income third; who-pays bars for the selected year and paths over time; a ninth headline measure for challenges and comparisons | — |
-| 9. Financing lever | let a reform choose how its taxes are raised (payroll, income, head tax), so who pays is a policy choice, not an assumption | open |
+| 9. Financing lever | ✅ **DONE (Nov 15)** — a reform chooses how its new revenue is raised (general revenue, payroll tax, income tax on high earners, flat premium); each instrument has its own incidence and its own cost of public funds | — |
 
 ---
 

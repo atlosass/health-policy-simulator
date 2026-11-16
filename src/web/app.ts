@@ -271,7 +271,19 @@ function buildLever(lever: Lever): HTMLElement {
   const title = `<label for="${id}" title="${esc(lever.help)}">${lever.label}</label>`;
   const policy = () => state.policy as unknown as Record<string, unknown>;
 
-  if (lever.kind === "toggle") {
+  if (lever.kind === "choice") {
+    row.classList.add("leverchoice");
+    row.innerHTML =
+      `${title}<select id="${id}">` +
+      lever.options.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("") +
+      `</select>`;
+    const sel = row.querySelector("select")!;
+    sel.addEventListener("change", () => {
+      policy()[lever.key] = sel.value;
+      rerun();
+    });
+    syncFns.push(() => (sel.value = String(state.policy[lever.key])));
+  } else if (lever.kind === "toggle") {
     row.innerHTML = `${title}<input type="checkbox" id="${id}">`;
     const cb = row.querySelector("input")!;
     cb.addEventListener("change", () => {
@@ -436,7 +448,7 @@ const EXPLAIN: Record<string, Explain> = {
 EXPLAIN.burden = {
   title: "Who pays",
   mechanism:
-    "Health care is paid for through four channels: at the point of care, in premiums, in the wages employers hold back to pay their share of premiums, and in taxes. Premiums and held-back wages are about the same number of dollars whatever a worker earns, so they take a larger share of a small income; taxes rise with income. Moving costs from premiums to taxes therefore shifts the burden toward higher incomes. The pale segment is the income lost to the drag of raising those taxes, which nobody receives.",
+    "Health care is paid for through four channels: at the point of care, in premiums, in the wages employers hold back to pay their share of premiums, and in taxes. Premiums and held-back wages are about the same number of dollars whatever a worker earns, so they take a larger share of a small income; taxes rise with income. Moving costs from premiums to taxes therefore shifts the burden toward higher incomes, and how far depends on the tax: the “New revenue raised by” lever chooses between the existing tax mix, a payroll tax, a tax on high earners and a flat premium. The pale segment is the income lost to the drag of raising the money, which nobody receives; it is smallest for a flat premium and largest for a tax on high earners.",
   types: ["reform-begins", "wage-offset", "offer-shift", "fiscal-ledger"],
   lead: { label: "Health costs paid by the low-income third (share of income)", read: (y) => burdenShare(y, "low"), fmt: (v) => `${v.toFixed(1)}%` },
 };
@@ -729,7 +741,7 @@ const BURDEN_PARTS = [
   { key: "outOfPocket", label: "Out of pocket", color: "#dc2626" },
   { key: "premiums", label: "Premiums", color: "#2563eb" },
   { key: "wages", label: "Wages given up", color: "#d97706" },
-  { key: "taxes", label: "Taxes", color: "#9333ea" },
+  { key: "taxes", label: "Taxes and charges", color: "#9333ea" },
   { key: "drag", label: "Drag of taxation", color: "#cbd5e1" },
 ] as const;
 

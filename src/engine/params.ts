@@ -170,6 +170,14 @@ export const PARAMS = {
   // ---- Public sector ----
   /** Marginal cost of public funds: each $1 of revenue costs society $1.30. */
   marginalCostOfFunds: 1.3,
+  /**
+   * Marginal cost of public funds for the other ways a reform can raise new
+   * health revenue (see financing.ts). A flat charge distorts almost nothing; a
+   * payroll tax is a little cheaper than the general mix; a tax concentrated on
+   * high earners is the most costly per dollar. Stylized values in the range
+   * the public-finance literature reports.
+   */
+  financingCostOfFunds: { payroll: 1.25, topIncome: 1.5, flat: 1.05 },
   /** Public program admin load (lower than private). */
   publicLoad: 0.05,
 
