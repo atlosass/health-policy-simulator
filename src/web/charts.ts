@@ -363,3 +363,69 @@ export function ironTriangleMulti(
     : "";
   return svg(title, rings + spokes + labels + ref + polys + legend);
 }
+
+/**
+ * Groups of stacked bars: for each group (an income third) one or two bars
+ * (no reform, this package), each stacked by component. A pale segment is drawn
+ * hatched-light to mark a cost that is borne but not paid to anyone.
+ */
+export function groupedStackedBars(opts: {
+  title: string;
+  groups: { label: string; bars: { label: string; total: string; segments: { value: number; color: string }[] }[] }[];
+  legend: { label: string; color: string }[];
+  yFmt: (v: number) => string;
+}): string {
+  const bottom = 40; // room for two lines of labels under the bars
+  const top = 58; // room for two legend rows
+  const height = H - top - bottom;
+  const all = opts.groups.flatMap((g) => g.bars.map((b) => b.segments.reduce((sum, s) => sum + Math.max(0, s.value), 0)));
+  const yMax = Math.max(0.0001, ...all) * 1.12;
+  const yOf = (v: number) => top + height - (height * v) / yMax;
+  const grid = yTicks(0, yMax)
+    .map((t) => {
+      const y = yOf(t);
+      return (
+        `<line x1="${M.left}" y1="${y.toFixed(1)}" x2="${M.left + plotW}" y2="${y.toFixed(1)}" class="grid"/>` +
+        `<text x="${M.left - 6}" y="${(y + 3).toFixed(1)}" class="ytick">${esc(opts.yFmt(t))}</text>`
+      );
+    })
+    .join("");
+  const groupW = plotW / opts.groups.length;
+  const bars = opts.groups
+    .map((g, gi) => {
+      const n = g.bars.length;
+      const barW = Math.min(34, (groupW * 0.72) / n);
+      const gap = 5;
+      const span = n * barW + (n - 1) * gap;
+      const x0 = M.left + gi * groupW + (groupW - span) / 2;
+      const drawn = g.bars
+        .map((b, bi) => {
+          const x = x0 + bi * (barW + gap);
+          let level = 0;
+          const rects = b.segments
+            .map((s) => {
+              const v = Math.max(0, s.value);
+              const y = yOf(level + v);
+              const h = yOf(level) - y;
+              level += v;
+              return h > 0.2 ? `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${s.color}"/>` : "";
+            })
+            .join("");
+          return (
+            rects +
+            `<text x="${(x + barW / 2).toFixed(1)}" y="${(yOf(level) - 4).toFixed(1)}" class="barval">${esc(b.total)}</text>` +
+            (n > 1 ? `<text x="${(x + barW / 2).toFixed(1)}" y="${top + height + 11}" class="barlabel">${esc(b.label)}</text>` : "")
+          );
+        })
+        .join("");
+      return drawn + `<text x="${(M.left + (gi + 0.5) * groupW).toFixed(1)}" y="${H - 8}" class="xtick grouplabel">${esc(g.label)}</text>`;
+    })
+    .join("");
+  const legend = opts.legend
+    .map(
+      (s, i) =>
+        `<g transform="translate(${M.left + (i % 3) * 140}, ${30 + Math.floor(i / 3) * 13})"><rect width="9" height="9" y="-8" fill="${s.color}"/><text x="13" class="legend">${esc(s.label)}</text></g>`,
+    )
+    .join("");
+  return svg(opts.title, grid + bars + legend);
+}

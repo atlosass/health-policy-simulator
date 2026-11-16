@@ -143,6 +143,26 @@ export interface CoverageCounts {
   uninsured: number;
 }
 
+/**
+ * What the average household in a group pays toward health care in a year, by
+ * channel, in dollars. The four payment channels add up, across everyone, to
+ * national health spending (less care that nobody paid for).
+ */
+export interface HealthBurden {
+  /** Mean total compensation of the group: the base for "share of income". */
+  income: number;
+  /** Paid at the point of care. */
+  outOfPocket: number;
+  /** Premiums the household pays itself, after any subsidy and after the tax break on its share; plus any mandate penalty. */
+  premiums: number;
+  /** Cash wages given up because the employer pays toward premiums, net of the tax break on that contribution. */
+  wages: number;
+  /** The household's share of the taxes that finance government health costs. */
+  taxes: number;
+  /** Its share of the deadweight loss of raising those taxes: income lost, though not paid to anyone. */
+  drag: number;
+}
+
 export interface YearResult {
   year: number;
   /** The policy actually in force this year (differs from the reform package before and during a phase-in). */
@@ -153,6 +173,12 @@ export interface YearResult {
   insuredRate: number;
   /** Uninsured rate by income tercile (low/mid/high) — distributional lens. */
   uninsuredRateByIncome: { low: number; mid: number; high: number };
+  /**
+   * Who pays for health care: average payments per household by channel, for
+   * each third of the income distribution and for everyone. Taxes are shared
+   * out in proportion to each household's stylized tax bill.
+   */
+  burden: { low: HealthBurden; mid: HealthBurden; high: HealthBurden; all: HealthBurden };
   /** Individual-market posted premiums (community rating) for this year. */
   premiums: TierPremiums;
   /** Average expected cost (risk) of the individual-market pool — selection gauge. */

@@ -21,7 +21,7 @@ Other commands:
 | `npm run dev` | Build, then serve at http://localhost:5173/ |
 | `npm run build` | Compile `src/` to browser modules in `web/dist/` |
 | `npm run serve` | Serve `web/` without rebuilding |
-| `npm test` | Run the 95 regression tests (about 25 seconds) |
+| `npm test` | Run the 103 regression tests (about 25 seconds) |
 | `npm run typecheck` | Type-check without building |
 
 To put the simulator online, run `npm run build` and upload the `web/` folder to any static host (GitHub Pages, Netlify, the LMS). There is no server component.
@@ -44,6 +44,8 @@ To put the simulator online, run `npm run build` and upload the `web/` folder to
 | Govt. social cost | Government health outlays plus the deadweight loss of raising the revenue, scaled to the 170 million US adults aged 26–64 |
 
 **Iron Triangle over time.** The year bar above the charts (slider and Play button) picks a year. The triangle shows that year against the no-reform run in the same year, and the chart beside it plots the three scores (affordability, quality, access) for every year, with dashed lines for no reform and a cursor at the selected year.
+
+**Who pays.** The last two charts show what households pay toward health care as a share of their income, through every channel: out of pocket, premiums, the wages employers hold back for their share of premiums, and taxes. The bars show the selected year for each third of the income distribution, without and with the reform; the line chart shows each third over time. Under current law the low-income third pays the largest share (about 24% against 14% for the high-income third), because premiums cost about the same number of dollars whatever you earn. Tax-financed reforms reverse that.
 
 **Supply and wages.** "Private provider capacity" shows hospital and physician capacity relative to year 0: it follows demand, but only after a construction or training lag and only as far as Certificate of Need and residency slots allow. The premiums chart includes the cash wages that workers at offering firms give up to pay the employer's share.
 
@@ -75,7 +77,7 @@ These matter when interpreting results in class.
 
 - **Supply timing is stylized.** Hospitals take 3 years to add capacity and physicians 7, and the physician workforce can grow about 1.5% a year at most unless residency slots are raised. These are round numbers chosen to be plausible, not estimates.
 - **Mergers only raise prices.** The model has no merger efficiencies or quality effects, so a merger that cannot raise prices (single payer, a binding price cap) has no motive and does not happen.
-- **Household pay ignores taxes.** Employer premium contributions come out of cash wages, but the taxes that finance public coverage are not deducted from household pay; they appear only in the government ledger. Take-home pay is therefore not comparable between privately and publicly financed systems.
+- **How taxes are raised is fixed.** The who-pays charts share out the taxes that finance health spending in proportion to a stylized tax bill (a three-bracket income tax plus payroll tax). A reform cannot choose a different way of raising its money, such as a payroll tax or a flat premium, though in practice that choice largely decides who pays.
 - **Idle capacity is free.** Provider costs have no fixed component, so a high-margin market can carry excess capacity without its margins falling.
 - **Dollar totals cover adults under 65 only.** National figures are scaled to the 170 million US adults aged 26–64, the people the model simulates. They leave out children and Medicare, so single payer shows up at about $2.4 trillion a year, not the $3 trillion or more usually quoted for everyone. Health spending as a share of GDP is scaled separately, to the familiar 17.5%.
 - **The individual market is a little too expensive.** Silver premiums come out near $8,500 against a real average near $7,300 (inside the calibration band, at its top).

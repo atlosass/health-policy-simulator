@@ -36,6 +36,21 @@ export function marginalTaxRate(income: number): number {
   return PARAMS.taxRateLow;
 }
 
+/**
+ * Stylized annual tax bill on a given income: the three-bracket income tax
+ * plus payroll tax. It is used only to share out the taxes that finance health
+ * spending: each household pays in proportion to this.
+ */
+export function taxLiability(income: number): number {
+  const low = PARAMS.taxRateVeryLowBracket;
+  const high = PARAMS.taxRateBracket;
+  const incomeTax =
+    PARAMS.taxRateVeryLow * Math.min(income, low) +
+    PARAMS.taxRateLow * Math.max(0, Math.min(income, high) - low) +
+    PARAMS.taxRateHigh * Math.max(0, income - high);
+  return incomeTax + PARAMS.payrollTaxRate * income;
+}
+
 function drawHousehold(rng: Rng, id: number, age: number): Household {
   const income = Math.max(
     8_000,

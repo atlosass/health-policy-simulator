@@ -16,10 +16,19 @@ import {
 } from "../engine/index.ts";
 import type { ExplanationEvent, Policy, SimResult, YearResult } from "../engine/index.ts";
 import { LEVERS, LEVER_GROUPS, TIMING, encodeState, decodeState, type Lever, type ShareState } from "./levers.ts";
-import { lineChart, stackedArea, stackedAreaDollars, ironTriangle, type GapSeries, type Series, type ReformMarker } from "./charts.ts";
+import {
+  lineChart,
+  stackedArea,
+  stackedAreaDollars,
+  ironTriangle,
+  groupedStackedBars,
+  type GapSeries,
+  type Series,
+  type ReformMarker,
+} from "./charts.ts";
 import { dollars, clamp, esc, COVERAGE_COLORS, COVERAGE_LABELS } from "./format.ts";
 import { RunPool, band, meanSeries, statAt, pairedDelta } from "./runs.ts";
-import { TILE_METRICS, METRIC_BY_KEY, type Metric } from "./metrics.ts";
+import { TILE_METRICS, METRIC_BY_KEY, burdenShare, type Metric } from "./metrics.ts";
 import { challengeBanner, challengeEditor, criterionRow, readEditor, MAX_CRITERIA, type Challenge } from "./challenge.ts";
 import { mountCompare, decodeCompare } from "./compare.ts";
 import { POP, YEARS, RUNS, configFor, seedsFor, triangleScore, meanTriangle } from "./shared.ts";
@@ -424,6 +433,14 @@ const EXPLAIN: Record<string, Explain> = {
   },
 };
 
+EXPLAIN.burden = {
+  title: "Who pays",
+  mechanism:
+    "Health care is paid for through four channels: at the point of care, in premiums, in the wages employers hold back to pay their share of premiums, and in taxes. Premiums and held-back wages are about the same number of dollars whatever a worker earns, so they take a larger share of a small income; taxes rise with income. Moving costs from premiums to taxes therefore shifts the burden toward higher incomes. The pale segment is the income lost to the drag of raising those taxes, which nobody receives.",
+  types: ["reform-begins", "wage-offset", "offer-shift", "fiscal-ledger"],
+  lead: { label: "Health costs paid by the low-income third (share of income)", read: (y) => burdenShare(y, "low"), fmt: (v) => `${v.toFixed(1)}%` },
+};
+
 /** A chart with its "Why?" button. */
 function cell(key: string, chart: string): string {
   return `<div class="cell">${chart}<button class="whybtn" data-why="${key}" title="What moved this chart, and why">Why?</button></div>`;
@@ -623,6 +640,21 @@ function renderDashboard(): void {
     marker,
   );
 
+  // Who pays, over time: payments through every channel as a share of income, by income third.
+  const burdenLines = lineChart({
+    title: "Who pays: health costs as a share of income",
+    yFmt: (v) => `${Math.round(v)}%`,
+    yMin: 0,
+    marker,
+    legendNote: reform ? "dashed = no reform" : undefined,
+    series: [
+      ...BURDEN_GROUPS.map((g) => line(g.label, g.color, (y) => burdenShare(y, g.key))),
+      ...(reform
+        ? BURDEN_GROUPS.map((g) => ({ label: g.label, color: g.color, values: meanSeries(base, (y) => burdenShare(y, g.key)), dashed: true, hideLegend: true }))
+        : []),
+    ],
+  });
+
   const challengeHtml = state.editingChallenge
     ? challengeEditor(state.challenge)
     : state.challenge
@@ -646,6 +678,8 @@ function renderDashboard(): void {
     cell("innovation", innoChart) +
     cell("employer", employerChart) +
     cell("gov", govChart) +
+    `<div class="cell" id="burdenCell">${burdenBars()}</div>` +
+    cell("burden", burdenLines) +
     `</div>` +
     `<div id="drillmount">${drillDown()}</div>`;
 
@@ -656,13 +690,14 @@ function wireDashboard(dash: HTMLElement): void {
   // Both year sliders (above the triangle and in the "Why?" panel) pick the same year.
   wireYearSliders(dash.querySelector(".grid")!);
   document.getElementById("playYears")!.addEventListener("click", togglePlayback);
-  for (const btn of dash.querySelectorAll<HTMLButtonElement>(".whybtn")) {
-    btn.addEventListener("click", () => {
-      state.explain = btn.dataset.why ?? null;
-      refreshDrill();
-      document.getElementById("drillmount")!.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    });
-  }
+  // One handler for every "Why?" button, including those in cells that are redrawn when the year changes.
+  dash.onclick = (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".whybtn");
+    if (!btn) return;
+    state.explain = btn.dataset.why ?? null;
+    refreshDrill();
+    document.getElementById("drillmount")!.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
   wireDrill();
   wireChallenge(dash);
 }
@@ -683,6 +718,46 @@ const TRI_AXES = [
   { key: "quality", label: "Quality", color: "#16a34a" },
   { key: "access", label: "Access", color: "#ea580c" },
 ] as const;
+
+// ---- Who pays: the selected year, by income third and by channel ----
+const BURDEN_GROUPS = [
+  { key: "low", label: "Low income", color: "#dc2626" },
+  { key: "mid", label: "Middle", color: "#d97706" },
+  { key: "high", label: "High income", color: "#2563eb" },
+] as const;
+const BURDEN_PARTS = [
+  { key: "outOfPocket", label: "Out of pocket", color: "#dc2626" },
+  { key: "premiums", label: "Premiums", color: "#2563eb" },
+  { key: "wages", label: "Wages given up", color: "#d97706" },
+  { key: "taxes", label: "Taxes", color: "#9333ea" },
+  { key: "drag", label: "Drag of taxation", color: "#cbd5e1" },
+] as const;
+
+/** Stacked bars for the selected year: each income group, with and without the reform. */
+function burdenBars(): string {
+  const { runs, base } = ready();
+  const year = state.selectedYear;
+  const reform = hasReform();
+  const bar = (label: string, source: SimResult[], group: "low" | "mid" | "high" | "all") => {
+    const income = source.reduce((sum, r) => sum + r.years[year]!.burden[group].income, 0) / source.length;
+    const share = (key: (typeof BURDEN_PARTS)[number]["key"]) =>
+      (source.reduce((sum, r) => sum + r.years[year]!.burden[group][key], 0) / source.length / income) * 100;
+    const segments = BURDEN_PARTS.map((p) => ({ value: share(p.key), color: p.color }));
+    const paid = segments.slice(0, 4).reduce((sum, s) => sum + s.value, 0);
+    return { label, total: `${paid.toFixed(0)}%`, segments };
+  };
+  const groups = ([...BURDEN_GROUPS, { key: "all", label: "Everyone" }] as const).map((g) => ({
+    label: g.label,
+    bars: reform ? [bar("without", base, g.key), bar("with", runs, g.key)] : [bar("", runs, g.key)],
+  }));
+  const chart = groupedStackedBars({
+    title: `Who pays — year ${year} (share of income)`,
+    groups,
+    legend: BURDEN_PARTS.map((p) => ({ label: p.label, color: p.color })),
+    yFmt: (v) => `${Math.round(v)}%`,
+  });
+  return `${chart}<button class="whybtn" data-why="burden" title="What moved this chart, and why">Why?</button>`;
+}
 
 /** The triangle for the selected year, against the no-reform runs in the same year. */
 function triangleChart(): string {
@@ -731,6 +806,7 @@ function updateYearViews(): void {
   };
   set("triCell", triangleChart());
   set("scoreCell", scoreChart());
+  set("burdenCell", burdenBars());
   if (!state.explain) set("eventlist", eventItems());
   for (const el of document.querySelectorAll(".yearlabel")) el.textContent = yearLabel();
   for (const s of document.querySelectorAll<HTMLInputElement>(".yearslider")) s.value = String(state.selectedYear);

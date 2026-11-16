@@ -126,6 +126,24 @@ export const METRICS: Metric[] = [
   },
 ];
 
+/** Payments toward health care (out of pocket, premiums, wages given up, taxes) as a percent of a group's income. */
+export function burdenShare(y: YearResult, group: "low" | "mid" | "high" | "all"): number {
+  const b = y.burden[group];
+  return ((b.outOfPocket + b.premiums + b.wages + b.taxes) / b.income) * 100;
+}
+
+METRICS.push({
+  key: "burdenLow",
+  label: "Health costs, low-income third",
+  unit: "% of income",
+  read: (y) => burdenShare(y, "low"),
+  fmt: (v) => `${v.toFixed(1)}%`,
+  fmtDelta: (d) => `${d.toFixed(1)} pp`,
+  better: "lower",
+  epsilon: 0.3,
+  help: "What the lowest-income third of households pays toward health care, through every channel (out of pocket, premiums, wages their employers hold back for premiums, and their share of taxes), as a share of their income.",
+});
+
 export const METRIC_BY_KEY = new Map(METRICS.map((m) => [m.key, m]));
 /** The six measures shown as tiles. */
 export const TILE_METRICS = METRICS.slice(0, 6);

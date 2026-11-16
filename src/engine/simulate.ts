@@ -1,7 +1,7 @@
 import { PARAMS } from "./params.ts";
 import { PUBLIC_PLAN, TIER_BY_ID, oopFor, type PlanTier, type TierId } from "./plans.ts";
 import { mulberry32, hashUniform, categoricalFrom, DRAW } from "./rng.ts";
-import { generatePopulation, agePopulation, expectedCost } from "./population.ts";
+import { generatePopulation, agePopulation, expectedCost, taxLiability } from "./population.ts";
 import { chooseCoverage, type ChoiceResult } from "./choice.ts";
 import { realizedSpend, adequateSpend } from "./utilization.ts";
 import { seedPremiums, updatePremiums, emptyExperience, type PoolExperience } from "./insurer.ts";
@@ -20,6 +20,7 @@ import type {
   CoverageCounts,
   CoverageKind,
   ExplanationEvent,
+  HealthBurden,
   Household,
   SimConfig,
   SimResult,
@@ -298,6 +299,8 @@ export function runSimulation(config: SimConfig): SimResult {
     const deliveredPrivate = { hospital: 0, physician: 0 };
     const uninsuredByIncome: number[] = [];
     const incomes: number[] = [];
+    // What each household paid this year, by channel (same order as `incomes`).
+    const paid: { outOfPocket: number; premiums: number; wages: number; taxBill: number }[] = [];
 
     for (const rec of records) {
       const { h, choice, mu, shockMult } = rec;
@@ -320,6 +323,12 @@ export function runSimulation(config: SimConfig): SimResult {
         incomes.push(h.income);
         uninsuredByIncome.push(choice.coverage === "uninsured" ? 1 : 0);
         if (choice.coverage === "uninsured") penaltyRevenue += policy.mandatePenalty;
+        paid.push({
+          outOfPocket: 0,
+          premiums: choice.coverage === "uninsured" ? policy.mandatePenalty : 0,
+          wages: wageOffset,
+          taxBill: taxLiability(h.cashIncome),
+        });
 
         const gapQuantity = rec.adequate > 0 ? Math.max(0, (rec.adequate - delivered) / rec.adequate) : 0;
         const waitGap = Math.min(0.6, clearPub.waitWeeks * PARAMS.waitToForgone);
@@ -400,6 +409,21 @@ export function runSimulation(config: SimConfig): SimResult {
       totalIncome += h.income;
       incomes.push(h.income);
       uninsuredByIncome.push(choice.coverage === "uninsured" ? 1 : 0);
+      // An enrolled worker's tax break covers both halves of the premium: the
+      // employee share (already netted out of `premiumPaid`) and the employer's
+      // contribution, which is netted out of the wages given up.
+      let wagesPaid = wageOffset;
+      if (choice.coverage === "esi") {
+        const offer = h.esiOffer!;
+        const breakOnOwnShare = PARAMS.esiWorkerShare * offer.premium - offer.workerCost;
+        wagesPaid -= offer.taxSubsidy - breakOnOwnShare;
+      }
+      paid.push({
+        outOfPocket: oop,
+        premiums: choice.premiumPaid + (plan === null ? policy.mandatePenalty : 0),
+        wages: wagesPaid,
+        taxBill: taxLiability(h.cashIncome),
+      });
 
       // Health stock: the gap between adequate care and what was actually
       // delivered (cost-sharing + rationing) plus a wait-time access penalty.
@@ -483,16 +507,42 @@ export function runSimulation(config: SimConfig): SimResult {
     const sorted = [...incomes].sort((a, b) => a - b);
     const t1 = sorted[Math.floor(sorted.length / 3)]!;
     const t2 = sorted[Math.floor((2 * sorted.length) / 3)]!;
-    const bucket = {
-      low: { uninsured: 0, n: 0 },
-      mid: { uninsured: 0, n: 0 },
-      high: { uninsured: 0, n: 0 },
-    };
+    const newBucket = () => ({ uninsured: 0, n: 0, income: 0, outOfPocket: 0, premiums: 0, wages: 0, taxBill: 0 });
+    const bucket = { low: newBucket(), mid: newBucket(), high: newBucket() };
     for (let i = 0; i < incomes.length; i++) {
       const b = incomes[i]! <= t1 ? bucket.low : incomes[i]! <= t2 ? bucket.mid : bucket.high;
+      const p = paid[i]!;
       b.uninsured += uninsuredByIncome[i]!;
       b.n++;
+      b.income += incomes[i]!;
+      b.outOfPocket += p.outOfPocket;
+      b.premiums += p.premiums;
+      b.wages += p.wages;
+      b.taxBill += p.taxBill;
     }
+    // Who pays: the taxes that finance government health costs (and the drag of
+    // raising them) are shared out in proportion to each household's tax bill.
+    const allBuckets = [bucket.low, bucket.mid, bucket.high];
+    const totalTaxBill = allBuckets.reduce((sum, b) => sum + b.taxBill, 0);
+    const burdenOf = (groups: (typeof bucket.low)[]): HealthBurden => {
+      const sum = (read: (b: typeof bucket.low) => number) => groups.reduce((total, b) => total + read(b), 0);
+      const n = Math.max(1, sum((b) => b.n));
+      const taxShare = totalTaxBill > 0 ? sum((b) => b.taxBill) / totalTaxBill : 0;
+      return {
+        income: sum((b) => b.income) / n,
+        outOfPocket: sum((b) => b.outOfPocket) / n,
+        premiums: sum((b) => b.premiums) / n,
+        wages: sum((b) => b.wages) / n,
+        taxes: (taxShare * revenueRequired) / n,
+        drag: (taxShare * deadweightLoss) / n,
+      };
+    };
+    const burden = {
+      low: burdenOf([bucket.low]),
+      mid: burdenOf([bucket.mid]),
+      high: burdenOf([bucket.high]),
+      all: burdenOf(allBuckets),
+    };
     const uninsuredRateByIncome = {
       low: bucket.low.uninsured / Math.max(1, bucket.low.n),
       mid: bucket.mid.uninsured / Math.max(1, bucket.mid.n),
@@ -596,8 +646,8 @@ export function runSimulation(config: SimConfig): SimResult {
         data: { wageOffset: 0, offerRatePct: 0 },
         narrative:
           `With no employer coverage, the roughly $${Math.round(prevWageOffset).toLocaleString()} a year that offering firms held back ` +
-          `from each worker's pay for premiums returns to wages. The taxes that replace those premiums are counted in the ` +
-          `government ledger, not deducted from household pay.`,
+          `from each worker's pay for premiums returns to wages. Households now pay for coverage through taxes instead; ` +
+          `the “Who pays” chart shows the net effect by income.`,
       });
       prevWageOffset = 0;
     }
@@ -657,6 +707,7 @@ export function runSimulation(config: SimConfig): SimResult {
       coverage: { ...coverage },
       insuredRate,
       uninsuredRateByIncome,
+      burden,
       premiums: { ...premiums },
       individualPoolAvgRisk: experience.poolAvgRisk,
       individualEnrollmentByTier: { ...enrollmentByTier },

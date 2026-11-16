@@ -64,7 +64,8 @@ test("a lever that changes nobody's situation changes nothing at all", () => {
   // A mandate penalty of one cent moves no one's choice, and it must not move
   // anyone's random draws either: every number in the run stays the same.
   eachSeed((seed) => {
-    const strip = (res: SimResult) => res.years.map(({ policy: _p, events: _e, government: _g, ...rest }) => rest);
+    // The cent itself shows up in the government ledger and in who pays what, so those are set aside.
+    const strip = (res: SimResult) => res.years.map(({ policy: _p, events: _e, government: _g, burden: _b, ...rest }) => rest);
     const base = runSimulation(reformConfig(BASELINE_POLICY, { seed, years: 8, populationSize: 4000 }));
     const cent = runSimulation(reformConfig({ ...BASELINE_POLICY, mandatePenalty: 0.01 }, { seed, years: 8, populationSize: 4000 }));
     assert.deepEqual(strip(cent), strip(base));
