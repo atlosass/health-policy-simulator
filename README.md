@@ -24,7 +24,15 @@ Other commands:
 | `npm test` | Run the 112 regression tests (about 25 seconds) |
 | `npm run typecheck` | Type-check without building |
 
-To put the simulator online, run `npm run build` and upload the `web/` folder to any static host (GitHub Pages, Netlify, the LMS). There is no server component.
+## The published site
+
+Students use the simulator at **https://www.anthonylosasso.com/health-policy-simulator/**. Nothing to install: it runs in the browser.
+
+The site is published from the GitHub repository [atlosass/health-policy-simulator](https://github.com/atlosass/health-policy-simulator) by GitHub Pages. Every push to the `main` branch runs the tests, rebuilds the site and republishes it, which takes about a minute (see `.github/workflows/pages.yml`). To publish a change, commit it and run `git push`.
+
+Share links carry the levers, not the results, so a link saved before a change to the model will show different numbers after it. Avoid pushing changes to the model while an assignment is open.
+
+To host it somewhere else instead, run `npm run build` and upload the `web/` folder to any static host. It does not work opened directly from disk; it has to be served from a web address.
 
 ## Using the dashboard
 
